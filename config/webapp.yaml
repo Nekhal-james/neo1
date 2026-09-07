@@ -1,0 +1,33 @@
+# Neo admin panel — committed defaults. No secrets in this file.
+#
+# Secrets (password hash, session secret) go in config/webapp.local.yaml, which is
+# gitignored and written by `neo-webapp-setup`. The local file is merged over this
+# one, so anything here can be overridden per machine.
+
+server:
+  host: 0.0.0.0
+  port: 8443
+  tls:
+    # Required for the webapp camera/mic sources from any device other than the
+    # host: browsers only grant getUserMedia in a secure context.
+    enabled: true
+    certfile: certs/dev-cert.pem
+    keyfile: certs/dev-key.pem
+
+auth:
+  username: admin
+  session_max_age_s: 43200   # 12 h
+  max_attempts: 5
+  lockout_window_s: 300
+
+bridge:
+  # auto -> use ROS when rclpy and neo_msgs are importable, else the simulation
+  backend: auto
+
+media:
+  camera_max_fps: 8          # server-side cap as well as client-side
+  camera_jpeg_quality: 0.6
+  mic_sample_rate: 16000     # matches the wake word and ASR front end
+  speaker_sample_rate: 22050 # matches Piper's output
+  joy_rate_hz: 20
+  joy_deadman_ms: 300        # head stops if the joystick stream goes stale

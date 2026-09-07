@@ -1,0 +1,59 @@
+"""FastAPI application factory."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+
+from .api import api_router
+from .auth import SESSION_COOKIE, Authenticator
+from .bridge import Bridge, make_bridge
+from .config import Config
+from .media import MediaManager, media_router
+
+log = logging.getLogger(__name__)
+UI_DIR = Path(__file__).parent / "ui"
+
+
+def create_app(config: Config | None = None, bridge: Bridge | None = None) -> FastAPI:
+    cfg = config or Config.load()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await app.state.bridge.start()
+        log.info("admin panel up: bridge=%s", app.state.bridge.name)
+        try:
+            yield
+        finally:
+            await app.state.bridge.stop()
+
+    app = FastAPI(title="Neo admin panel", version="0.1.0", lifespan=lifespan)
+    app.state.config = cfg
+    app.state.auth = Authenticator(cfg.auth)
+    app.state.bridge = bridge or make_bridge(
+        cfg.bridge_backend, deadman_ms=cfg.media.joy_deadman_ms
+    )
+    app.state.media = MediaManager(app.state.bridge)
+
+    app.include_router(api_router)
+    app.include_router(media_router)
+
+    @app.get("/")
+    async def index(request: Request):
+        # The panel itself is behind the session; the login page is not.
+        user = request.app.state.auth.validate(request.cookies.get(SESSION_COOKIE))
+        if user is None:
+            return RedirectResponse("/login", status_code=302)
+        return FileResponse(UI_DIR / "index.html")
+
+    @app.get("/login")
+    async def login_page():
+        return FileResponse(UI_DIR / "login.html")
+
+    app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
+    return app

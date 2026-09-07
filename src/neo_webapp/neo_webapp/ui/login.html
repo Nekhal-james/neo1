@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Neo — sign in</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="login-card" id="form">
+      <h1>N E O</h1>
+      <div class="sub">admin panel</div>
+
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="username" value="admin" required>
+
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+
+      <button class="primary" type="submit" id="submit">Sign in</button>
+      <div class="error" id="error"></div>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const errorEl = document.getElementById('error');
+    const submit = document.getElementById('submit');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+      submit.disabled = true;
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        if (res.ok) {
+          window.location = '/';
+          return;
+        }
+        const body = await res.json().catch(() => ({}));
+        errorEl.textContent = body.detail || `sign-in failed (${res.status})`;
+      } catch (err) {
+        errorEl.textContent = 'cannot reach the panel';
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Neo — admin panel</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">N<span>E</span>O</div>
+    <div class="badge" id="badge-dialog">IDLE</div>
+    <div class="badge" id="badge-link">link: none</div>
+    <div class="badge" id="badge-backend">backend: ?</div>
+    <div class="spacer"></div>
+    <button class="danger" id="btn-estop">E-STOP</button>
+    <button id="btn-logout">Sign out</button>
+  </header>
+
+  <nav id="tabs">
+    <button data-tab="sources" class="active">Sources</button>
+    <button data-tab="system">System</button>
+    <button data-tab="head">Head</button>
+    <button data-tab="vision" disabled>Vision<span class="phase">P4</span></button>
+    <button data-tab="audio" disabled>Audio<span class="phase">P5</span></button>
+    <button data-tab="dialog" disabled>Dialog<span class="phase">P6</span></button>
+    <button data-tab="data" disabled>Data<span class="phase">P7</span></button>
+    <button data-tab="emotion" disabled>Emotion<span class="phase">P9</span></button>
+    <button data-tab="logs" disabled>Logs<span class="phase">P10</span></button>
+  </nav>
+
+  <main>
+    <!-- Sources -->
+    <section class="tab active" id="tab-sources">
+      <div class="grid">
+        <div class="card">
+          <h2>Stream backends</h2>
+          <div class="row">
+            <span class="k">Camera</span>
+            <span class="seg" data-stream="camera">
+              <button data-backend="hardware">hardware</button>
+              <button data-backend="webapp">webapp</button>
+            </span>
+          </div>
+          <div class="row">
+            <span class="k">Microphone</span>
+            <span class="seg" data-stream="mic">
+              <button data-backend="hardware">hardware</button>
+              <button data-backend="webapp">webapp</button>
+            </span>
+          </div>
+          <div class="row">
+            <span class="k">Speaker</span>
+            <span class="seg" data-stream="speaker">
+              <button data-backend="hardware">hardware</button>
+              <button data-backend="webapp">webapp</button>
+            </span>
+          </div>
+          <div class="hint" id="sources-hint">Switching is transactional — the old backend is deactivated only once the new one is active.</div>
+        </div>
+
+        <div class="card">
+          <h2>This device as I/O</h2>
+          <p class="hint" style="text-align:left;margin-top:0">
+            Streams this browser's camera and microphone to the robot. Requires HTTPS
+            from any device other than the host.
+          </p>
+          <div class="toggles">
+            <button id="btn-cam">Start camera</button>
+            <button id="btn-mic">Start mic</button>
+            <button id="btn-spk">Connect speaker</button>
+            <button id="btn-tone">Test tone</button>
+          </div>
+          <video id="preview" autoplay muted playsinline style="margin-top:12px;display:none"></video>
+          <div class="row" style="margin-top:10px"><span class="k">Camera in</span><span class="v" id="v-camfps">0.0 fps</span></div>
+          <div class="row"><span class="k">Mic in</span><span class="v" id="v-mickbps">0.0 kbps</span></div>
+          <div class="row"><span class="k">Channels open</span><span class="v" id="v-channels">—</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- System -->
+    <section class="tab" id="tab-system">
+      <div class="grid">
+        <div class="card">
+          <h2>Resources</h2>
+          <div class="row"><span class="k">CPU</span><span class="v" id="v-cpu">—</span></div>
+          <div class="row"><span class="k">Memory</span><span class="v" id="v-mem">—</span></div>
+          <div class="row"><span class="k">Temperature</span><span class="v" id="v-temp">—</span></div>
+          <div class="row"><span class="k">Uptime</span><span class="v" id="v-uptime">—</span></div>
+        </div>
+        <div class="card">
+          <h2>Off-board link</h2>
+          <div class="row"><span class="k">State</span><span class="v" id="v-linkup">—</span></div>
+          <div class="row"><span class="k">Active path</span><span class="v" id="v-linkpath">—</span></div>
+          <div class="row"><span class="k">RTT</span><span class="v" id="v-rtt">—</span></div>
+          <div class="row"><span class="k">Failures</span><span class="v" id="v-fails">—</span></div>
+        </div>
+        <div class="card">
+          <h2>Nodes</h2>
+          <div id="nodes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Head -->
+    <section class="tab" id="tab-head">
+      <div class="grid">
+        <div class="card">
+          <h2>Virtual joystick</h2>
+          <div class="pad" id="pad"><div class="knob" id="knob"></div></div>
+          <div class="controls">
+            <button id="btn-center">Center</button>
+          </div>
+          <div class="hint">
+            Release, close this tab, or drop the connection and the head stops within
+            <span id="deadman-ms">300</span> ms.
+          </div>
+        </div>
+        <div class="card">
+          <h2>Head state</h2>
+          <div class="row"><span class="k">Pan</span><span class="v" id="v-pan">—</span></div>
+          <div class="row"><span class="k">Tilt</span><span class="v" id="v-tilt">—</span></div>
+          <div class="row"><span class="k">At limit</span><span class="v" id="v-limit">—</span></div>
+          <div class="row"><span class="k">Arbiter source</span><span class="v" id="v-src">—</span></div>
+          <div class="row"><span class="k">E-stop</span><span class="v" id="v-estop">—</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-vision"><div class="stub">Camera preview with detection overlay — <code>Phase 4</code></div></section>
+    <section class="tab" id="tab-audio"><div class="stub">Wake-word meter, VAD view, TTS test — <code>Phase 5</code></div></section>
+    <section class="tab" id="tab-dialog"><div class="stub">Transcript, replies, latency breakdown — <code>Phase 6 / 8</code></div></section>
+    <section class="tab" id="tab-data"><div class="stub">Campus data editor, coverage map, unanswered questions — <code>Phase 7</code></div></section>
+    <section class="tab" id="tab-emotion"><div class="stub">Emotion state, overrides, gesture triggers — <code>Phase 9</code></div></section>
+    <section class="tab" id="tab-logs"><div class="stub">Journal tail, bag recording — <code>Phase 10</code></div></section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Secrets and machine-local configuration
+config/*.local.yaml
+certs/
+
+# ROS 2 / colcon
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+Thumbs.db
+.DS_Store
