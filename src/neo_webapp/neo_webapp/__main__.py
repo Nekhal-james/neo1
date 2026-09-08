@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg.server.tls.enabled = False
 
     if not cfg.auth.configured:
-        log.error("no admin password configured. Run: neo-webapp-setup")
+        log.error("no admin password configured. Run: neo --webapp setup")
         return 2
 
     ssl_kwargs: dict = {}
@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         certfile, keyfile = cfg.server.tls.resolved()
         if not certfile.exists() or not keyfile.exists():
             log.error(
-                "TLS enabled but certificate missing (%s). Run: neo-webapp-devcert",
+                "TLS enabled but certificate missing (%s). Run: neo --webapp devcert",
                 certfile,
             )
             return 2

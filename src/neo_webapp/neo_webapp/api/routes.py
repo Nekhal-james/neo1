@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from ..auth import SESSION_COOKIE, require_session, require_ws_session
 from ..bridge import BACKENDS, STREAMS
 from ..bridge.mock import MockBridge
+from ..dialog_status import read_dialog_status
 from ..link_status import read_link_status
 
 log = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ async def login(request: Request) -> JSONResponse:
     if not auth.cfg.configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="no admin password set - run neo-webapp-setup",
+            detail="no admin password set - run neo --webapp setup",
         )
 
     remaining = auth.throttled(client_ip)
@@ -204,6 +205,19 @@ async def link_status(user: str = Depends(require_session)) -> dict:
     """
     link, ping = read_link_status()
     return {"link": asdict(link), "ping": asdict(ping) if ping else None}
+
+
+# -- dialog (intelligence's chat/asr/tts state) -----------------------------
+
+
+@router.get("/api/dialog/status")
+async def dialog_status(user: str = Depends(require_session)) -> dict:
+    """Reads intelligence's local status file -- see ../dialog_status.py.
+
+    Same reasoning as /api/link/status: file I/O, so its own route rather
+    than folded into /api/state or /ws/state.
+    """
+    return asdict(read_dialog_status())
 
 
 # -- health (unauthenticated, deliberately says nothing sensitive) ---------

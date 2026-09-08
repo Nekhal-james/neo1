@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>intelligence</name>
+  <version>0.1.0</version>
+  <description>Prompts, RAG data, and chat/ASR/TTS for the Neo assistant, reached via model_conn's link.</description>
+  <maintainer email="funkydude450@gmail.com">Nekhal James</maintainer>
+  <license>MIT</license>
+
+  <!-- Only nodes/dialog_node.py needs these, and only once neo_msgs exists (Phase 1/5). -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>neo_msgs</exec_depend>
+
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <!--
+    No per-package setup.py right now: pip installation is consolidated in the
+    repo root's pyproject.toml/setup.py (see ../../README.md) so there is
+    exactly one way to install everything. build_type/setup.py comes back
+    here once the ROS workspace / colcon build is actually wired up (plan
+    Phase 0/1).
+  -->
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -36,13 +36,19 @@ setup(
         "neo_perception",
         "neo_perception.nodes",
         "neo_perception.scripts",
+        "intelligence",
+        "intelligence.nodes",
     ],
     package_dir={
         "model_conn": "src/model-conn/model_conn",
         "neo_webapp": "src/neo_webapp/neo_webapp",
         "neo_perception": "src/neo_perception/neo_perception",
+        "intelligence": "src/intelligence/intelligence",
     },
-    package_data={"neo_webapp": ["ui/*.html", "ui/*.css", "ui/*.js"]},
+    package_data={
+        "neo_webapp": ["ui/*.html", "ui/*.css", "ui/*.js"],
+        "intelligence": ["prompts/*.txt"],
+    },
     include_package_data=True,
     install_requires=[
         # model_conn
@@ -54,6 +60,7 @@ setup(
         "argon2-cffi>=23.1",
         "itsdangerous>=2.1",
         "python-multipart>=0.0.9",
+        # intelligence's chat.py -- pure requests, no extra needed
     ],
     extras_require={
         "dev": [
@@ -66,12 +73,12 @@ setup(
         # neo_perception's tracking/gestures/engagement core is pure Python;
         # only the real YOLO detector backend needs this.
         "detector": ["ultralytics>=8.1", "opencv-python-headless>=4.9", "numpy>=1.24"],
+        # intelligence's chat.py works with none of this; only real ASR/TTS need it.
+        "voice": ["vosk>=0.3.45", "piper-tts>=1.2"],
     },
     entry_points={
         "console_scripts": [
             "neo = model_conn.__main__:main",
-            "neo-webapp-setup = neo_webapp.scripts.setup_admin:main",
-            "neo-webapp-devcert = neo_webapp.scripts.make_dev_cert:main",
             "neo-perception-bench = neo_perception.scripts.bench:main",
         ],
     },

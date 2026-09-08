@@ -412,7 +412,7 @@ function stopSpeaker() {
 function secureContextHint(what, err) {
   if (!window.isSecureContext) {
     return `The browser refused ${what} access because this page is not a secure ` +
-      `context. Serve the panel over HTTPS (run neo-webapp-devcert) or open it ` +
+      `context. Serve the panel over HTTPS (run neo --webapp devcert) or open it ` +
       `on localhost.`;
   }
   return `Could not open the ${what}: ${err.name}`;

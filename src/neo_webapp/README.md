@@ -17,8 +17,8 @@ Install from the repo root (`pip install -e ".[dev]"`, see the
 [top-level README](../../README.md)), then:
 
 ```bash
-neo-webapp-devcert          # TLS, needed for the browser camera/mic
-neo-webapp-setup            # sets the admin password
+neo --webapp devcert        # TLS, needed for the browser camera/mic
+neo --webapp setup          # sets the admin password
 neo --webapp up             # https://localhost:8443
 ```
 
@@ -82,10 +82,10 @@ stream must stop the head, not let it coast. Three independent guards:
 
 `config/webapp.yaml` holds committed defaults and no secrets.
 `config/webapp.local.yaml` holds the argon2 password hash and session secret; it is
-gitignored and written by `neo-webapp-setup`. The local file merges over the
-committed one, so any value can be overridden per machine.
-
-For unattended provisioning: `NEO_ADMIN_PASSWORD=... neo-webapp-setup`.
+gitignored and written by `neo --webapp setup`. The local file merges over the
+main `webapp.yaml` file to apply those overrides without making the working tree
+dirty.
+For unattended provisioning: `NEO_ADMIN_PASSWORD=... neo --webapp setup`.
 
 ## API
 

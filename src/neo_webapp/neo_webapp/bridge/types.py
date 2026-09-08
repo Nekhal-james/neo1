@@ -60,6 +60,24 @@ class PingStats:
 
 
 @dataclass
+class DialogView:
+    """Mirrors intelligence's status file -- see ../dialog_status.py.
+
+    Same reasoning as PingStats: not part of RobotState/the /ws/state
+    snapshot, since reading it is file I/O and that doesn't belong in the
+    4 Hz websocket loop. Served from its own route instead.
+    """
+
+    state: str = "IDLE"
+    last_prompt: str = ""
+    last_reply: str = ""
+    chat_source: Literal["ollama", "degraded", "none"] = "none"
+    asr_engine: str = ""
+    tts_engine: str = ""
+    updated_at: float | None = None
+
+
+@dataclass
 class HeadState:
     """Mirrors /head/state, plus the limits the UI needs to render them."""
 

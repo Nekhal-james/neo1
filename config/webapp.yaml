@@ -1,7 +1,7 @@
 # Neo admin panel — committed defaults. No secrets in this file.
 #
 # Secrets (password hash, session secret) go in config/webapp.local.yaml, which is
-# gitignored and written by `neo-webapp-setup`. The local file is merged over this
+# gitignored and written by `neo --webapp setup`. The local file is merged over this
 # one, so anything here can be overridden per machine.
 
 server:

@@ -9,6 +9,9 @@ Receiver role (the Pi):
 
 Admin panel (either machine):
     neo --webapp up
+
+Test the assistant directly, e.g. on the Pi:
+    neo --prompt "where is CS-204"
 """
 
 from __future__ import annotations
@@ -43,9 +46,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the admin panel instead of the model link, with 'up'",
     )
+    p.add_argument(
+        "--prompt",
+        metavar="TEXT",
+        help="ask the assistant TEXT directly, print the reply, exit (test path)",
+    )
     p.add_argument("--config", metavar="PATH", help="override config/model_conn.yaml")
     p.add_argument(
-        "command", nargs="?", choices=["up"], help="host/webapp: start serving"
+        "command", nargs="?", choices=["up", "setup", "devcert"], help="host/webapp: start serving/setup"
     )
     return p
 
@@ -107,6 +115,19 @@ def _cmd_ping(cfg: Config) -> int:
     return 1
 
 
+def _cmd_prompt(text: str, cfg: Config) -> int:
+    """Ask the assistant directly -- the test path for `neo --prompt`."""
+    try:
+        from intelligence.cli import run_prompt
+    except ImportError as exc:
+        # Same "don't swallow why" reasoning as _cmd_webapp: this also fires
+        # if intelligence imports fine but requests (or another dep) doesn't.
+        print(f"[model-conn] could not import intelligence: {exc}")
+        print("[model-conn] pip install -e \".[dev]\" from the repo root")
+        return 1
+    return run_prompt(text, mc_cfg=cfg)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     # parse_known_args, not parse_args: `--webapp up` forwards whatever this
@@ -115,16 +136,35 @@ def main(argv: list[str] | None = None) -> int:
     args, extra = parser.parse_known_args(argv)
 
     if args.webapp:
-        if args.command != "up":
-            print("[model-conn] usage: neo --webapp up")
+        if args.command == "up":
+            return _cmd_webapp(extra)
+        elif args.command == "setup":
+            try:
+                from neo_webapp.scripts.setup_admin import main as setup_main
+            except ImportError as exc:
+                print(f"[model-conn] could not import neo_webapp: {exc}")
+                print("[model-conn] pip install -e \".[dev]\" from the repo root")
+                return 1
+            return setup_main(extra)
+        elif args.command == "devcert":
+            try:
+                from neo_webapp.scripts.make_dev_cert import main as devcert_main
+            except ImportError as exc:
+                print(f"[model-conn] could not import neo_webapp: {exc}")
+                print("[model-conn] pip install -e \".[dev]\" from the repo root")
+                return 1
+            return devcert_main(extra)
+        else:
+            print("[model-conn] usage: neo --webapp {up,setup,devcert}")
             return 1
-        return _cmd_webapp(extra)
 
     if extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     cfg = Config.load(args.config)
 
+    if args.prompt:
+        return _cmd_prompt(args.prompt, cfg)
     if args.command == "up":
         return ollama.up(cfg, args.model)
     if args.connection_status:

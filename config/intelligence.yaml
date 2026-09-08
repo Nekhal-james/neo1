@@ -1,0 +1,29 @@
+# Neo's assistant behaviour -- committed defaults. No secrets in this file.
+#
+# Per-machine overrides (the real chat model name, downloaded vosk/piper model
+# paths) go in config/intelligence.local.yaml, which is gitignored.
+
+chat:
+  model_name: ""      # must match what `neo --model ... up` registered in Ollama
+  timeout_s: 8.0
+
+asr:
+  # vosk is the only engine implemented -- always local, no off-board dependency.
+  # Off-board Whisper (an accuracy upgrade when the link is healthy) is Phase 6 scope.
+  engine: vosk
+  vosk_model_path: ""  # e.g. models/vosk-model-small-en-in-0.4
+  sample_rate: 16000
+
+tts:
+  engine: piper
+  piper_model_path: ""   # e.g. models/en_US-lessac-medium.onnx
+  piper_config_path: ""  # optional; piper can often infer this from the model path
+
+prompts:
+  # empty -> use the packaged intelligence/intelligence/prompts/system_prompt.txt
+  system_prompt_path: ""
+
+rag:
+  data_dir: src/intelligence/rag/data
+
+status_file: var/intelligence/status.json
