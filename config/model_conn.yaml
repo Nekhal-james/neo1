@@ -5,10 +5,13 @@
 
 host:
   # Serving role (`neo --model ... up`) runs on the laptop.
-  default_model_path: ""      # e.g. /home/you/models/qwen2.5-3b-instruct-q4_k_m.gguf
-  ollama_port: 11434          # Ollama's own OpenAI-compatible port
-  bind_host: 0.0.0.0          # TODO(mTLS): must become interface-specific once tls.py is real
+  default_model_path: ""      # e.g. /home/you/models/qwen2.5-3b-instruct-q4_k_m.gguf -- set this in model_conn.local.yaml, not here
+  ollama_port: 11434          # public port -- the mTLS proxy binds here when tls.enabled; Ollama binds here directly otherwise
+  bind_host: 0.0.0.0
   idle_unload_minutes: 30     # plan section 0.3.3's "idle unload" requirement
+  # Ollama itself always binds loopback-only on this port when tls.enabled --
+  # only the proxy is reachable from the network. Irrelevant when TLS is off.
+  internal_ollama_port: 11435
 
 receiver:
   # Ordered endpoints, Ethernet first, then Wi-Fi -- plan section 0.3.2.
@@ -17,15 +20,24 @@ receiver:
       host: 192.168.1.50      # DHCP-reserved address of the laptop's Ethernet NIC
       port: 11434
     - name: wifi
-      host: neo-brain.local   # mDNS name; SAN must cover this once mTLS is real
+      host: neo-brain.local   # mDNS name -- covered by the server cert's SAN
       port: 11434
   probe_interval_s: 2.0       # matches llm_client's continuous health probe cadence
   probe_timeout_s: 1.0
   ping_count: 5                # samples per `neo --connection:ping` run
 
 tls:
-  # STUBBED for this pass -- see model_conn/tls.py. No cert is loaded or
-  # verified; every command logs a loud warning every time it runs.
+  # Real mTLS -- see model_conn/tls.py and certs.py. Run `neo --tls init` once
+  # to generate the private CA + server + client certs, then flip this to
+  # true in config/model_conn.local.yaml on BOTH the host and the receiver.
+  # `false` is an explicit, loud (see tls.warn_insecure) opt-out for local
+  # dev/testing only -- CLAUDE.md/plan 0.3.1 require this true for real use.
   enabled: false
+  ca_cert: certs/model_conn/ca-cert.pem
+  ca_key: certs/model_conn/ca-key.pem
+  server_cert: certs/model_conn/server-cert.pem
+  server_key: certs/model_conn/server-key.pem
+  client_cert: certs/model_conn/client-cert.pem
+  client_key: certs/model_conn/client-key.pem
 
 status_file: var/model_conn/status.json   # relative to repo root; gitignored

@@ -59,6 +59,12 @@ Exactly one mode may be selected per invocation — `up`, `--connection:status`,
 `--connection:ping`, or `--prompt` — combining two of them is a usage error,
 not silently-picked precedence.
 
+Set up mTLS once (see below), then flip it on:
+
+```bash
+neo --tls init   # generates a private CA + server cert (this machine) + client cert (the receiver)
+```
+
 ## Why Ollama, and only Ollama
 
 Qwen 2.5 3B on a laptop GPU is squarely in Ollama's comfort zone: trivial
@@ -68,16 +74,42 @@ exactly one model and one host in this project, so a pluggable backend
 abstraction would be unused generality — `ollama.py` is the one place that
 would need to change if that ever stops being true.
 
-## Security: mTLS is stubbed, not skipped
+## Security: real mTLS, via a private CA
 
 CLAUDE.md and the plan (section 0.3.1) are explicit that an unauthenticated
 inference endpoint on a campus network is an open proxy, and must never run —
-not even briefly for testing. This first pass does not yet implement the
-private-CA / certificate flow, and it does not pretend to: every `up`,
-`--connection:status`, and `--connection:ping` invocation logs a loud,
-impossible-to-miss warning (see `model_conn/tls.py`). Real cert loading raises
-`TlsNotImplemented` rather than silently no-opping. Treat the warning as a
-standing TODO, not acceptable steady state.
+not even briefly for testing. `neo --tls init` (`certs.py`) generates a
+private CA once, a server cert for this machine (SAN covers `localhost`,
+this machine's hostname/IPs, and every host in `receiver.endpoints` — so
+both the Ethernet address and the Wi-Fi hostname validate), and a client cert
+for the receiver. Re-running `init` never touches the CA again (so
+previously-issued certs stay valid) but reissues the server/client certs —
+useful after adding a new endpoint.
+
+**Deploying to two machines:** run `neo --tls init` on the host. Copy
+`certs/model_conn/{ca-cert.pem,client-cert.pem,client-key.pem}` to the same
+path on the Pi — the server cert/key never leave the host. Set
+`tls.enabled: true` in `config/model_conn.local.yaml` **on both machines**.
+
+**Why a proxy in front of Ollama:** Ollama has no native TLS or
+client-certificate support. `neo --model ... up` binds Ollama itself to
+`127.0.0.1:{host.internal_ollama_port}` (loopback-only, never reachable from
+the network) and `tls_proxy.py` — a small FastAPI/uvicorn app, already a hard
+dependency via `neo_webapp` so this adds nothing new — takes the public
+`bind_host:ollama_port` with `ssl_cert_reqs=CERT_REQUIRED`, forwarding only
+requests that present a certificate signed by the CA.
+
+`tls.enabled: false` is a supported, explicit opt-out for local/dev testing
+(e.g. everything on one laptop loopback) — every `up`, `--connection:status`,
+and `--connection:ping` invocation logs a loud, impossible-to-miss warning in
+that case (`tls.warn_insecure`), so it can never be silently insecure. If
+`tls.enabled` is true but the certs are missing, commands fail with a clear
+"run `neo --tls init` first" — never a stack trace, never a silent fallback
+to plaintext.
+
+`tests/test_tls_proxy.py` proves the whole thing with a real TLS handshake
+(no mocks): a valid client cert succeeds, no cert is rejected, and a cert
+signed by a *different* CA is rejected too — not just "any cert works."
 
 ## Two grace-free failure surfaces, on purpose
 
@@ -113,8 +145,10 @@ writing the same status file so the two delivery paths never disagree.
 config.py       Config dataclass, load/merge pattern shared with neo_webapp
 link.py         pure Python: Endpoint probing, LinkTracker, ping aggregation
 ollama.py       host role: subprocess-manage `ollama serve` + model loading
+certs.py        private CA + server/client cert generation (neo --tls init)
+tls.py          cert/context helpers -- scheme, client cert kwargs, server ssl kwargs
+tls_proxy.py    the mTLS-terminating reverse proxy in front of Ollama
 status_store.py atomic JSON status file, read by neo_webapp
-tls.py          stubbed mTLS -- loud warnings, no silent insecurity
 nodes/          thin optional ROS wrapper (Phase 1)
 ```
 
@@ -127,4 +161,8 @@ python -m pytest -q
 Covers `link.py`'s probing/failover/ping-aggregation logic, the status file's
 atomic write/read (including corrupt-file and missing-file handling), config
 loading/merging, and `ollama.py`'s subprocess management (all monkeypatched —
-no real Ollama binary required to run the suite).
+no real Ollama binary required to run the suite). `certs.py`'s CA/cert
+generation is checked structurally (issuer, EKU, SAN, key-identifier chaining)
+with `cryptography`; `tls_proxy.py` is proven with **real TLS handshakes** —
+an actual server, actual sockets, actual OpenSSL — the one place in this
+package where a mock would hide the bug that actually matters.

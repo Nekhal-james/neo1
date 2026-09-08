@@ -13,8 +13,10 @@ log/
 # Model weights and their sample assets: fetched on demand, not source
 *.pt
 *.onnx
+*.gguf
 *_ncnn_model/
 bus.jpg
+models/
 
 # Python
 __pycache__/

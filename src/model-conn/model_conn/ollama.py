@@ -92,8 +92,9 @@ def ensure_model(model_path_or_name: str, *, port: int) -> str:
 
 
 def up(cfg: Config, model_override: str | None) -> int:
-    """`neo [--model PATH] up` -- resolve the model, ensure Ollama is serving it,
-    print the endpoint, and block until interrupted."""
+    """`neo [--model PATH] up` -- resolve the model, ensure Ollama is serving it
+    (behind the mTLS proxy when tls.enabled), print the endpoint, and block
+    until interrupted."""
     if not is_ollama_installed():
         print("[model-conn] ollama not found on PATH -- install it first: https://ollama.com")
         return 1
@@ -106,14 +107,24 @@ def up(cfg: Config, model_override: str | None) -> int:
         )
         return 1
 
-    tls.warn_insecure("ollama serve")
+    if cfg.tls.enabled:
+        try:
+            tls.require_server_certs(cfg)
+        except tls.TlsError as exc:
+            print(f"[model-conn] {exc}")
+            return 1
+        # Ollama itself only ever binds loopback here -- the proxy takes the
+        # public interface and is the only thing that verifies a client cert.
+        ollama_host, ollama_port = "127.0.0.1", cfg.host.internal_ollama_port
+    else:
+        tls.warn_insecure("ollama serve")
+        ollama_host, ollama_port = cfg.host.bind_host, cfg.host.ollama_port
 
-    port = cfg.host.ollama_port
-    if not is_serving(port):
-        log.info("starting ollama serve on %s:%d", cfg.host.bind_host, port)
-        proc = start_serve(port, cfg.host.bind_host)
+    if not is_serving(ollama_port):
+        log.info("starting ollama serve on %s:%d", ollama_host, ollama_port)
+        proc = start_serve(ollama_port, ollama_host)
         for _ in range(50):
-            if is_serving(port):
+            if is_serving(ollama_port):
                 break
             time.sleep(0.2)
         else:
@@ -123,12 +134,21 @@ def up(cfg: Config, model_override: str | None) -> int:
         proc = None
 
     try:
-        model_name = ensure_model(model, port=port)
+        model_name = ensure_model(model, port=ollama_port)
     except OllamaError as exc:
         print(f"[model-conn] {exc}")
         return 1
 
-    print(f"[model-conn] serving '{model_name}' at http://{cfg.host.bind_host}:{port}")
+    if cfg.tls.enabled:
+        from .tls_proxy import start_proxy_thread
+
+        start_proxy_thread(cfg)
+        print(
+            f"[model-conn] serving '{model_name}' behind mTLS at "
+            f"https://{cfg.host.bind_host}:{cfg.host.ollama_port}"
+        )
+    else:
+        print(f"[model-conn] serving '{model_name}' at http://{ollama_host}:{ollama_port}")
     print("[model-conn] press Ctrl-C to stop watching (ollama keeps running)")
 
     if proc is None:

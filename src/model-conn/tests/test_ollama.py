@@ -188,3 +188,62 @@ def test_up_reports_clear_error_when_no_model_given(monkeypatch, capsys):
     rc = ollama.up(Config(), model_override=None)
     assert rc == 1
     assert "no model path given" in capsys.readouterr().out
+
+
+def test_up_reports_clear_error_when_tls_enabled_but_certs_missing(monkeypatch, tmp_path, capsys):
+    from model_conn.config import Config
+
+    model = tmp_path / "qwen2.5-3b.gguf"
+    model.write_bytes(b"fake weights")
+
+    cfg = Config()
+    cfg.tls.enabled = True
+    cfg.tls.ca_cert = str(tmp_path / "nope-ca.pem")
+    cfg.tls.server_cert = str(tmp_path / "nope-server.pem")
+    cfg.tls.server_key = str(tmp_path / "nope-server-key.pem")
+
+    monkeypatch.setattr(ollama, "is_ollama_installed", lambda: True)
+    rc = ollama.up(cfg, model_override=str(model))
+    assert rc == 1
+    assert "neo --tls init" in capsys.readouterr().out
+
+
+def test_up_binds_ollama_to_loopback_and_starts_proxy_when_tls_enabled(
+    monkeypatch, tmp_path
+):
+    from model_conn.config import Config
+
+    model = tmp_path / "qwen2.5-3b.gguf"
+    model.write_bytes(b"fake weights")
+
+    cfg = Config()
+    cfg.tls.enabled = True
+    for name in ("ca_cert", "server_cert", "server_key"):
+        p = tmp_path / f"{name}.pem"
+        p.write_text("fake", encoding="utf-8")
+        setattr(cfg.tls, name, str(p))
+    cfg.host.internal_ollama_port = 19999
+
+    serve_calls = []
+    monkeypatch.setattr(ollama, "is_ollama_installed", lambda: True)
+    monkeypatch.setattr(ollama, "is_serving", lambda port, **_kw: True)
+    monkeypatch.setattr(
+        ollama, "start_serve", lambda *a, **kw: serve_calls.append(a)
+    )
+    monkeypatch.setattr(ollama.subprocess, "run", lambda cmd, **kw: None)
+
+    proxy_calls = []
+    monkeypatch.setattr(
+        "model_conn.tls_proxy.start_proxy_thread", lambda cfg: proxy_calls.append(cfg)
+    )
+    monkeypatch.setattr(
+        ollama.time,
+        "sleep",
+        lambda _s: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    rc = ollama.up(cfg, model_override=str(model))
+    assert rc == 0
+    assert serve_calls == []  # already "serving" per the fake is_serving
+    assert len(proxy_calls) == 1
+    assert proxy_calls[0] is cfg

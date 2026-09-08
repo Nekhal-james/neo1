@@ -30,6 +30,11 @@ class HostConfig:
     ollama_port: int = 11434
     bind_host: str = "0.0.0.0"
     idle_unload_minutes: int = 30
+    # Ollama itself only ever binds to 127.0.0.1 on this port when tls.enabled --
+    # the mTLS proxy (tls_proxy.py) takes the public bind_host:ollama_port
+    # instead and forwards authenticated requests here. Irrelevant when TLS
+    # is off: Ollama binds bind_host:ollama_port directly, as before.
+    internal_ollama_port: int = 11435
 
 
 @dataclass
@@ -49,7 +54,19 @@ class ReceiverConfig:
 
 @dataclass
 class TlsConfig:
+    # Explicit opt-out for local/dev testing (e.g. everything on one laptop
+    # loopback). CLAUDE.md/plan 0.3.1: real deployments must never run
+    # without this -- see tls.warn_insecure(), which fires loudly whenever
+    # this is False.
     enabled: bool = False
+    ca_cert: str = "certs/model_conn/ca-cert.pem"
+    # The CA's own private key -- needed only by `neo --tls init` to sign new
+    # server/client certs, never by the server or the receiver at request time.
+    ca_key: str = "certs/model_conn/ca-key.pem"
+    server_cert: str = "certs/model_conn/server-cert.pem"
+    server_key: str = "certs/model_conn/server-key.pem"
+    client_cert: str = "certs/model_conn/client-cert.pem"
+    client_key: str = "certs/model_conn/client-key.pem"
 
 
 @dataclass
@@ -63,6 +80,30 @@ class Config:
     @property
     def status_path(self) -> Path:
         return _resolve(self.status_file)
+
+    @property
+    def ca_cert_path(self) -> Path:
+        return _resolve(self.tls.ca_cert)
+
+    @property
+    def ca_key_path(self) -> Path:
+        return _resolve(self.tls.ca_key)
+
+    @property
+    def server_cert_path(self) -> Path:
+        return _resolve(self.tls.server_cert)
+
+    @property
+    def server_key_path(self) -> Path:
+        return _resolve(self.tls.server_key)
+
+    @property
+    def client_cert_path(self) -> Path:
+        return _resolve(self.tls.client_cert)
+
+    @property
+    def client_key_path(self) -> Path:
+        return _resolve(self.tls.client_key)
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
@@ -86,6 +127,7 @@ class Config:
                 ollama_port=int(host_raw.get("ollama_port", 11434)),
                 bind_host=host_raw.get("bind_host", "0.0.0.0"),
                 idle_unload_minutes=int(host_raw.get("idle_unload_minutes", 30)),
+                internal_ollama_port=int(host_raw.get("internal_ollama_port", 11435)),
             ),
             receiver=ReceiverConfig(
                 endpoints=[_endpoint_from_raw(e) for e in endpoints_raw],
@@ -93,7 +135,15 @@ class Config:
                 probe_timeout_s=float(receiver_raw.get("probe_timeout_s", 1.0)),
                 ping_count=int(receiver_raw.get("ping_count", 5)),
             ),
-            tls=TlsConfig(enabled=bool(tls_raw.get("enabled", False))),
+            tls=TlsConfig(
+                enabled=bool(tls_raw.get("enabled", False)),
+                ca_cert=tls_raw.get("ca_cert", "certs/model_conn/ca-cert.pem"),
+                ca_key=tls_raw.get("ca_key", "certs/model_conn/ca-key.pem"),
+                server_cert=tls_raw.get("server_cert", "certs/model_conn/server-cert.pem"),
+                server_key=tls_raw.get("server_key", "certs/model_conn/server-key.pem"),
+                client_cert=tls_raw.get("client_cert", "certs/model_conn/client-cert.pem"),
+                client_key=tls_raw.get("client_key", "certs/model_conn/client-key.pem"),
+            ),
             status_file=raw.get("status_file", "var/model_conn/status.json"),
         )
 

@@ -15,6 +15,10 @@ Admin panel (either machine):
 Test the assistant directly, e.g. on the Pi:
     neo --prompt "where is CS-204"
 
+Set up mTLS (run once on the host, then copy the client cert/key + CA cert
+to the Pi -- see the printed paths):
+    neo --tls init
+
 `--webapp ...` forwards every flag it doesn't itself recognize straight to
 neo_webapp's own CLI -- including neo_webapp's own `--config`, which is a
 *different* file than the one below. model_conn's `--config` only applies to
@@ -32,6 +36,7 @@ from .config import Config
 from .status_store import write_status
 
 WEBAPP_SUBCOMMANDS = ("up", "setup", "devcert")
+TLS_SUBCOMMANDS = ("init",)
 
 
 def _webapp_probe() -> argparse.ArgumentParser:
@@ -45,6 +50,16 @@ def _webapp_probe() -> argparse.ArgumentParser:
     manually instead, in `main()`."""
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--webapp", action="store_true")
+    return p
+
+
+def _tls_probe() -> argparse.ArgumentParser:
+    """Same reasoning as `_webapp_probe`, except `--tls` never forwards to
+    another program's CLI, so it's safe to also own `--config` here directly
+    rather than needing a second pass."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--tls", action="store_true")
+    p.add_argument("--config", metavar="PATH")
     return p
 
 
@@ -108,8 +123,14 @@ def _cmd_webapp(subcommand: str, extra_args: list[str]) -> int:
 
 
 def _cmd_status(cfg: Config) -> int:
-    tls.warn_insecure("connection:status")
-    tracker = link.LinkTracker(cfg.receiver.endpoints, cfg.receiver.probe_timeout_s)
+    if not cfg.tls.enabled:
+        tls.warn_insecure("connection:status")
+    try:
+        transport = link.transport_for(cfg)
+    except tls.TlsError as exc:
+        print(f"[model-conn] {exc}")
+        return 1
+    tracker = link.LinkTracker(cfg.receiver.endpoints, cfg.receiver.probe_timeout_s, transport=transport)
     status = tracker.check_once()
     write_status(status, None, path=cfg.status_path)
 
@@ -121,11 +142,18 @@ def _cmd_status(cfg: Config) -> int:
 
 
 def _cmd_ping(cfg: Config) -> int:
-    tls.warn_insecure("connection:ping")
+    if not cfg.tls.enabled:
+        tls.warn_insecure("connection:ping")
+    try:
+        transport = link.transport_for(cfg)
+    except tls.TlsError as exc:
+        print(f"[model-conn] {exc}")
+        return 1
     stats = link.run_ping(
         cfg.receiver.endpoints,
         count=cfg.receiver.ping_count,
         timeout_s=cfg.receiver.probe_timeout_s,
+        transport=transport,
     )
     link_status = link.LinkStatus(
         up=stats.received > 0,
@@ -142,6 +170,63 @@ def _cmd_ping(cfg: Config) -> int:
             f"{stats.rtt_max_ms:.1f} ms (path={stats.active_path})"
         )
         return 0
+    return 1
+
+
+def _cmd_tls_init(cfg: Config) -> int:
+    """`neo --tls init` -- generate the CA (once) plus a fresh server cert
+    (for this machine) and client cert (for the receiver). Safe to re-run:
+    the CA is never overwritten once created; server/client certs are
+    reissued every time, e.g. after adding a new receiver.endpoints host."""
+    from . import certs
+
+    certs.generate_ca(cfg.ca_cert_path, cfg.ca_key_path)
+
+    local_hosts, local_ips = certs.local_hostnames_and_ips()
+    endpoint_hosts = [e.host for e in cfg.receiver.endpoints if e.host]
+    # Endpoint hosts may be IPs or DNS names -- split so each goes in the
+    # SAN type that actually validates.
+    endpoint_ips, endpoint_dns = [], []
+    for h in endpoint_hosts:
+        try:
+            import ipaddress
+
+            ipaddress.ip_address(h)
+            endpoint_ips.append(h)
+        except ValueError:
+            endpoint_dns.append(h)
+
+    certs.generate_server_cert(
+        ca_cert_path=cfg.ca_cert_path,
+        ca_key_path=cfg.ca_key_path,
+        cert_path=cfg.server_cert_path,
+        key_path=cfg.server_key_path,
+        dns_names=[*local_hosts, *endpoint_dns],
+        ip_addresses=[*local_ips, *endpoint_ips],
+    )
+    certs.generate_client_cert(
+        ca_cert_path=cfg.ca_cert_path,
+        ca_key_path=cfg.ca_key_path,
+        cert_path=cfg.client_cert_path,
+        key_path=cfg.client_key_path,
+    )
+
+    print(f"[model-conn] CA:            {cfg.ca_cert_path}")
+    print(f"[model-conn] server cert:   {cfg.server_cert_path}")
+    print(f"[model-conn] client cert:   {cfg.client_cert_path}")
+    print(
+        "\nSet tls.enabled: true in config/model_conn.local.yaml on BOTH machines.\n"
+        f"Copy {cfg.ca_cert_path.name}, {cfg.client_cert_path.name}, and "
+        f"{cfg.client_key_path.name} to the Pi's certs/model_conn/ directory -- "
+        "the server cert/key stay on this machine only."
+    )
+    return 0
+
+
+def _cmd_tls(subcommand: str, cfg: Config) -> int:
+    if subcommand == "init":
+        return _cmd_tls_init(cfg)
+    print(f"[model-conn] usage: neo --tls {{{','.join(TLS_SUBCOMMANDS)}}}")
     return 1
 
 
@@ -172,6 +257,18 @@ def main(argv: list[str] | None = None) -> int:
             print(usage)
             return 1
         return _cmd_webapp(subcommand, forward)
+
+    tls_args, tls_remainder = _tls_probe().parse_known_args(argv)
+    if tls_args.tls:
+        usage = f"[model-conn] usage: neo --tls {{{','.join(TLS_SUBCOMMANDS)}}}"
+        if not tls_remainder or tls_remainder[0].startswith("-"):
+            print(usage)
+            return 1
+        subcommand = tls_remainder[0]
+        if subcommand not in TLS_SUBCOMMANDS:
+            print(usage)
+            return 1
+        return _cmd_tls(subcommand, Config.load(tls_args.config))
 
     parser = build_parser()
     args = parser.parse_args(argv)

@@ -22,6 +22,7 @@ from typing import Callable
 from model_conn.config import Config as ModelConnConfig
 from model_conn.config import Endpoint
 from model_conn.link import probe_ordered
+from model_conn.link import transport_for as probe_transport_for
 
 from .config import Config
 from .prompts import load_system_prompt
@@ -38,11 +39,12 @@ ChatTransport = Callable[[str, int, str, str, float, str], str]
 """(host, port, model, message, timeout_s, system) -> reply text. Raises on failure."""
 
 
-def _http_chat(host: str, port: int, model: str, message: str, timeout_s: float, system: str) -> str:
+def _chat_request(scheme: str, host: str, port: int, model: str, message: str,
+                   timeout_s: float, system: str, **request_kwargs) -> str:
     import requests
 
     resp = requests.post(
-        f"http://{host}:{port}/api/chat",
+        f"{scheme}://{host}:{port}/api/chat",
         json={
             "model": model,
             "messages": [
@@ -52,10 +54,31 @@ def _http_chat(host: str, port: int, model: str, message: str, timeout_s: float,
             "stream": False,
         },
         timeout=timeout_s,
+        **request_kwargs,
     )
     resp.raise_for_status()
     data = resp.json()
     return data["message"]["content"]
+
+
+def _http_chat(host: str, port: int, model: str, message: str, timeout_s: float, system: str) -> str:
+    return _chat_request("http", host, port, model, message, timeout_s, system)
+
+
+def chat_transport_for(mc_cfg: ModelConnConfig) -> ChatTransport:
+    """Mirrors model_conn.link.transport_for: plain HTTP when tls.enabled is
+    False, HTTPS presenting the client cert when it's True."""
+    if not mc_cfg.tls.enabled:
+        return _http_chat
+
+    from model_conn import tls
+
+    kwargs = tls.client_request_kwargs(mc_cfg)
+
+    def _https_chat(host: str, port: int, model: str, message: str, timeout_s: float, system: str) -> str:
+        return _chat_request("https", host, port, model, message, timeout_s, system, **kwargs)
+
+    return _https_chat
 
 
 @dataclass
@@ -86,7 +109,7 @@ def ask(
     if host is not None:
         start = time.monotonic()
         try:
-            call = transport if transport is not None else _http_chat
+            call = transport if transport is not None else chat_transport_for(mc_cfg)
             reply = call(host, port, cfg.chat.model_name, text, cfg.chat.timeout_s, system)
             result = ChatResult(
                 reply=reply,
@@ -105,9 +128,19 @@ def ask(
 
 
 def _resolve_endpoint(mc_cfg: ModelConnConfig, probe_transport=None) -> tuple[str | None, int]:
-    kwargs = {"timeout_s": mc_cfg.receiver.probe_timeout_s}
-    if probe_transport is not None:
-        kwargs["transport"] = probe_transport
+    if probe_transport is None:
+        from model_conn.tls import TlsError
+
+        try:
+            probe_transport = probe_transport_for(mc_cfg)
+        except TlsError as exc:
+            # tls.enabled but certs missing -- no reachable endpoint is not
+            # a crash, it's exactly the degraded-mode case ask() already
+            # handles when nothing answers.
+            log.warning("mTLS not ready: %s", exc)
+            return None, 0
+
+    kwargs = {"timeout_s": mc_cfg.receiver.probe_timeout_s, "transport": probe_transport}
 
     probe = probe_ordered(mc_cfg.receiver.endpoints, **kwargs)
     if probe is not None and probe.ok:

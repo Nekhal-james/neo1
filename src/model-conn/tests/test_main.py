@@ -96,3 +96,47 @@ def test_webapp_dispatches_devcert(monkeypatch):
     rc = main(["--webapp", "devcert"])
     assert rc == 0
     assert calls == [[]]
+
+
+def test_tls_bad_subcommand(capsys):
+    rc = main(["--tls", "bogus"])
+    assert rc == 1
+    assert "usage: neo --tls" in capsys.readouterr().out
+
+
+def test_tls_missing_subcommand(capsys):
+    rc = main(["--tls"])
+    assert rc == 1
+    assert "usage: neo --tls" in capsys.readouterr().out
+
+
+def test_tls_init_dispatch(monkeypatch, tmp_path):
+    calls = []
+    import model_conn.__main__ as mm
+
+    monkeypatch.setattr(mm, "_cmd_tls_init", lambda cfg: calls.append(cfg) or 0)
+
+    cfg_path = tmp_path / "model_conn.yaml"
+    cfg_path.write_text("", encoding="utf-8")
+    rc = main(["--tls", "init", "--config", str(cfg_path)])
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_tls_config_flag_is_recognized(monkeypatch, tmp_path):
+    """--tls doesn't forward to another program, so it's allowed to own
+    --config directly -- unlike --webapp, there's no ambiguity to guard."""
+    seen_cfg_paths = []
+    import model_conn.__main__ as mm
+
+    def fake_init(cfg):
+        seen_cfg_paths.append(cfg.source_path)
+        return 0
+
+    monkeypatch.setattr(mm, "_cmd_tls_init", fake_init)
+
+    cfg_path = tmp_path / "custom.yaml"
+    cfg_path.write_text("host:\n  ollama_port: 9999\n", encoding="utf-8")
+    rc = main(["--tls", "init", "--config", str(cfg_path)])
+    assert rc == 0
+    assert seen_cfg_paths == [cfg_path]

@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-from .config import Endpoint
+from .config import Config, Endpoint
 
 ActivePath = Literal["eth", "wifi", "none"]
 
@@ -32,6 +32,32 @@ def _http_get(host: str, port: int, timeout_s: float) -> float:
     resp = requests.get(f"http://{host}:{port}/api/tags", timeout=timeout_s)
     resp.raise_for_status()
     return (time.monotonic() - start) * 1000.0
+
+
+def transport_for(cfg: Config) -> Transport:
+    """The transport `--connection:status`/`--connection:ping` should
+    actually use: plain HTTP when tls.enabled is False (matches `_http_get`
+    exactly), or HTTPS presenting the client cert when it's True.
+
+    A thin wrapper, not a new code path: this only changes the scheme and
+    adds `cert=`/`verify=` -- the probing logic itself is untouched.
+    """
+    if not cfg.tls.enabled:
+        return _http_get
+
+    from . import tls
+
+    kwargs = tls.client_request_kwargs(cfg)
+
+    def _https_get(host: str, port: int, timeout_s: float) -> float:
+        import requests
+
+        start = time.monotonic()
+        resp = requests.get(f"https://{host}:{port}/api/tags", timeout=timeout_s, **kwargs)
+        resp.raise_for_status()
+        return (time.monotonic() - start) * 1000.0
+
+    return _https_get
 
 
 @dataclass
