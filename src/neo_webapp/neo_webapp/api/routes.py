@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, status
 from fastapi.responses import JSONResponse
@@ -16,6 +17,7 @@ from fastapi.responses import JSONResponse
 from ..auth import SESSION_COOKIE, require_session, require_ws_session
 from ..bridge import BACKENDS, STREAMS
 from ..bridge.mock import MockBridge
+from ..link_status import read_link_status
 
 log = logging.getLogger(__name__)
 
@@ -188,6 +190,20 @@ async def test_tone(request: Request, user: str = Depends(require_session)) -> d
         raise HTTPException(501, "test tone is a mock-bridge affordance")
     result = await bridge.emit_test_tone()
     return result.to_dict()
+
+
+# -- link (model-conn's host/receiver connection) --------------------------
+
+
+@router.get("/api/link/status")
+async def link_status(user: str = Depends(require_session)) -> dict:
+    """Reads model-conn's local status file -- see ../link_status.py.
+
+    Deliberately not folded into /api/state or /ws/state: this does file I/O,
+    and that doesn't belong in the 4 Hz websocket snapshot loop.
+    """
+    link, ping = read_link_status()
+    return {"link": asdict(link), "ping": asdict(ping) if ping else None}
 
 
 # -- health (unauthenticated, deliberately says nothing sensitive) ---------

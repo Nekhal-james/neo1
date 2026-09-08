@@ -1,0 +1,31 @@
+# Off-board model connection -- committed defaults. No secrets in this file.
+#
+# Per-machine overrides (e.g. a different model path on your laptop, or real
+# endpoint addresses) go in config/model_conn.local.yaml, which is gitignored.
+
+host:
+  # Serving role (`neo --model ... up`) runs on the laptop.
+  default_model_path: ""      # e.g. /home/you/models/qwen2.5-3b-instruct-q4_k_m.gguf
+  ollama_port: 11434          # Ollama's own OpenAI-compatible port
+  bind_host: 0.0.0.0          # TODO(mTLS): must become interface-specific once tls.py is real
+  idle_unload_minutes: 30     # plan section 0.3.3's "idle unload" requirement
+
+receiver:
+  # Ordered endpoints, Ethernet first, then Wi-Fi -- plan section 0.3.2.
+  endpoints:
+    - name: eth
+      host: 192.168.1.50      # DHCP-reserved address of the laptop's Ethernet NIC
+      port: 11434
+    - name: wifi
+      host: neo-brain.local   # mDNS name; SAN must cover this once mTLS is real
+      port: 11434
+  probe_interval_s: 2.0       # matches llm_client's continuous health probe cadence
+  probe_timeout_s: 1.0
+  ping_count: 5                # samples per `neo --connection:ping` run
+
+tls:
+  # STUBBED for this pass -- see model_conn/tls.py. No cert is loaded or
+  # verified; every command logs a loud warning every time it runs.
+  enabled: false
+
+status_file: var/model_conn/status.json   # relative to repo root; gitignored

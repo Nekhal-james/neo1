@@ -41,6 +41,25 @@ class LinkHealth:
 
 
 @dataclass
+class PingStats:
+    """Mirrors model_conn.link.PingStats -- populated from its status file.
+
+    Not part of RobotState/the /ws/state snapshot: it comes from polling
+    model-conn's local JSON file (see ../link_status.py), and that file I/O
+    doesn't belong in the 4 Hz websocket loop. Served from its own route
+    instead.
+    """
+
+    sent: int = 0
+    received: int = 0
+    loss_pct: float = 0.0
+    rtt_min_ms: float | None = None
+    rtt_avg_ms: float | None = None
+    rtt_max_ms: float | None = None
+    active_path: Literal["eth", "wifi", "none"] = "none"
+
+
+@dataclass
 class HeadState:
     """Mirrors /head/state, plus the limits the UI needs to render them."""
 

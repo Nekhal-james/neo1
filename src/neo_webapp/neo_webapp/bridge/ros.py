@@ -87,6 +87,9 @@ class RosBridge(Bridge):
 
           subscribe  /dialog/state        neo_msgs/DialogState
                      /link/health         neo_msgs/LinkHealth
+                     # future publisher: model_conn/nodes/link_node.py (model-conn
+                     # package). Until then, ../link_status.py reads model-conn's
+                     # local status file instead, with no ROS involved.
                      /head/state          sensor_msgs/JointState
                      /emotion/state       neo_msgs/EmotionState
                      /sources/state       neo_msgs/SourcesState
