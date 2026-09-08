@@ -5,7 +5,7 @@ multiple `src/*` roots: that dynamic-discovery path depends on setuptools/pip
 version behaviour that isn't consistent everywhere, and it silently produced
 an editable install missing neo_webapp on at least one real machine. A plain
 setup.py with a fixed package list has worked unambiguously since forever,
-which is what this repo actually needs -- three source trees, not many.
+which is what this repo actually needs -- four source trees, not many.
 
 Packages under src/ keep their own package.xml (ROS metadata for a future
 colcon build) but have no setup.py of their own, so this file is the only

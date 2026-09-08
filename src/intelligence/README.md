@@ -51,6 +51,13 @@ already use. It never re-implements probing or health checks; it just adds
 one more thing you can do once a healthy endpoint is found (POST a chat
 request instead of just checking `/api/tags`).
 
+This also means `neo --prompt` picks up mTLS for free: `chat_transport_for()`
+mirrors `model_conn.link.transport_for()` exactly (plain HTTP when
+`tls.enabled` is false, HTTPS with the client cert when it's true — see
+[model_conn's README](../model-conn/README.md)). Nothing in this package
+knows or cares whether TLS is on; it just asks `model_conn` for the right
+transport.
+
 ## Why Vosk and Piper, and why they're an optional extra
 
 Vosk (STT) is always-local per CLAUDE.md's invariant that ASR runs on the Pi

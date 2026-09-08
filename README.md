@@ -44,6 +44,12 @@ src/
   intelligence/              prompts, RAG data, chat/ASR/TTS
 ```
 
+Gitignored, machine-local, never committed: `config/*.local.yaml` (secrets
+and per-machine overrides — password hashes, real endpoint IPs, model
+paths), `certs/` (TLS certs, including the private CA from `neo --tls init`),
+`models/` (`.gguf`/`.onnx` weights), and `var/` (the JSON status files
+`neo_webapp` polls).
+
 There is exactly one way to `pip install` this repo: from the root, below.
 Packages under `src/` keep their own `package.xml` (ROS metadata for a future
 colcon build) but have no `setup.py` of their own, so there's no independent
