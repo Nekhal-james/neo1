@@ -59,11 +59,12 @@ def _cmd_webapp(extra_args: list[str]) -> int:
     """
     try:
         from neo_webapp.__main__ import main as webapp_main
-    except ImportError:
-        print(
-            "[model-conn] neo_webapp is not installed -- pip install -e . "
-            "from the repo root, or -e src/neo_webapp directly"
-        )
+    except ImportError as exc:
+        # Don't swallow *why*: this except also fires if neo_webapp imports
+        # fine but one of ITS dependencies (fastapi, uvicorn, ...) doesn't --
+        # that's a very different fix than "package not installed".
+        print(f"[model-conn] could not import neo_webapp: {exc}")
+        print("[model-conn] pip install -e \".[dev]\" from the repo root")
         return 1
     return webapp_main(extra_args)
 
