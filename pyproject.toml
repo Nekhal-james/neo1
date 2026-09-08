@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neo"
+version = "0.1.0"
+description = "Neo campus receptionist robot: admin panel, perception, and the off-board model connection CLI."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    # model_conn
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    # neo_webapp
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "argon2-cffi>=23.1",
+    "itsdangerous>=2.1",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27", "psutil>=5.9", "cryptography>=42.0"]
+# neo_perception's tracking/gestures/engagement core is pure Python; only the
+# real YOLO detector backend needs this.
+detector = ["ultralytics>=8.1", "opencv-python-headless>=4.9", "numpy>=1.24"]
+
+[project.scripts]
+neo = "model_conn.__main__:main"
+neo-webapp-setup = "neo_webapp.scripts.setup_admin:main"
+neo-webapp-devcert = "neo_webapp.scripts.make_dev_cert:main"
+neo-perception-bench = "neo_perception.scripts.bench:main"
+
+# This is the ONE way to pip-install this repo: it installs model_conn,
+# neo_webapp, and neo_perception together from a single `pip install -e .`,
+# with no ROS toolchain required. The packages under src/ keep their own
+# package.xml (ROS metadata) but deliberately have no setup.py of their own,
+# so there is no independent per-package install path to fall out of sync
+# with this one. setup.py comes back per-package once the ROS workspace /
+# colcon build is actually wired up (plan Phase 0/1).
+[tool.setuptools]
+package-dir = { "model_conn" = "src/model-conn/model_conn", "neo_webapp" = "src/neo_webapp/neo_webapp", "neo_perception" = "src/neo_perception/neo_perception" }
+
+[tool.setuptools.packages.find]
+where = ["src/model-conn", "src/neo_webapp", "src/neo_perception"]
+include = ["model_conn*", "neo_webapp*", "neo_perception*"]
+exclude = ["tests", "tests.*"]
+
+[tool.setuptools.package-data]
+neo_webapp = ["ui/*.html", "ui/*.css", "ui/*.js"]

@@ -13,12 +13,19 @@ It is three things, deliberately separated:
 
 ## Quick start
 
+Install from the repo root (`pip install -e ".[dev]"`, see the
+[top-level README](../../README.md)), then:
+
 ```bash
-pip install -e ".[dev]"
 neo-webapp-devcert          # TLS, needed for the browser camera/mic
 neo-webapp-setup            # sets the admin password
-neo-webapp                  # https://localhost:8443
+neo --webapp up             # https://localhost:8443
 ```
+
+`neo --webapp up` (from the [`model_conn`](../model-conn/README.md) package)
+forwards straight into this package's own CLI, so every flag below still
+applies, e.g. `neo --webapp up --no-tls --port 8500`. `neo-webapp` is the same
+entry point called directly, if you'd rather not go through `model_conn`.
 
 On Windows without installing the package:
 

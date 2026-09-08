@@ -15,6 +15,12 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
+  <!--
+    No per-package setup.py right now: pip installation is consolidated in the
+    repo root's pyproject.toml (see ../../README.md) so there is exactly one
+    way to install everything. build_type/setup.py comes back here once the
+    ROS workspace / colcon build is actually wired up (plan Phase 0/1).
+  -->
   <export>
     <build_type>ament_python</build_type>
   </export>

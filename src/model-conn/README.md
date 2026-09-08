@@ -10,10 +10,16 @@ One CLI, `neo`, used on both ends of the Qwen 2.5 3B connection described in
 
 ## Quick start
 
+Install from the repo root — `pip install -e ".[dev]"` — which installs this
+package alongside `neo_webapp` and `neo_perception` in one shot; see the
+[top-level README](../../README.md). There is no separate install for this
+package alone: `neo --webapp up` (below) needs `neo_webapp` importable, so
+even on a Pi that only ever runs `--connection:status`/`--connection:ping`,
+install from the repo root.
+
 On the laptop:
 
 ```bash
-pip install -e ".[dev]"
 neo --model /path/to/qwen2.5-3b-instruct-q4_k_m.gguf up
 ```
 
@@ -25,7 +31,6 @@ replace it. Omit `--model` to use `host.default_model_path` from
 On the Pi:
 
 ```bash
-pip install -e ".[dev]"
 neo --connection:status
 neo --connection:ping
 ```
@@ -33,6 +38,11 @@ neo --connection:ping
 Both read `config/model_conn.yaml`'s `receiver.endpoints` (Ethernet first,
 then Wi-Fi, per plan section 0.3.2) and write the result to a local status
 file that `neo_webapp` reads — see below.
+
+`neo` also forwards to the admin panel itself: `neo --webapp up` (see
+[neo_webapp's README](../neo_webapp/README.md)) — this only works when
+`neo_webapp` is installed alongside this package, which the root-level
+install does.
 
 ## Why Ollama, and only Ollama
 

@@ -1,4 +1,4 @@
-"""`neo` -- CLI for both ends of the off-board LLM link.
+"""`neo` -- CLI for both ends of the off-board LLM link, and the admin panel.
 
 Host role (the laptop running Qwen 2.5 3B):
     neo --model path/to/model.gguf up
@@ -6,6 +6,9 @@ Host role (the laptop running Qwen 2.5 3B):
 Receiver role (the Pi):
     neo --connection:status
     neo --connection:ping
+
+Admin panel (either machine):
+    neo --webapp up
 """
 
 from __future__ import annotations
@@ -35,9 +38,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="receiver: run several probes and print latency/loss stats",
     )
+    p.add_argument(
+        "--webapp",
+        action="store_true",
+        help="run the admin panel instead of the model link, with 'up'",
+    )
     p.add_argument("--config", metavar="PATH", help="override config/model_conn.yaml")
-    p.add_argument("command", nargs="?", choices=["up"], help="host: start serving the model")
+    p.add_argument(
+        "command", nargs="?", choices=["up"], help="host/webapp: start serving"
+    )
     return p
+
+
+def _cmd_webapp(extra_args: list[str]) -> int:
+    """Forward to neo_webapp's own CLI, which owns --host/--port/--backend/etc.
+
+    `extra_args` is whatever this parser didn't recognize -- see the
+    parse_known_args call in main(), which is what lets `neo --webapp up
+    --port 9000` reach neo_webapp's own --port flag unchanged.
+    """
+    try:
+        from neo_webapp.__main__ import main as webapp_main
+    except ImportError:
+        print(
+            "[model-conn] neo_webapp is not installed -- pip install -e . "
+            "from the repo root, or -e src/neo_webapp directly"
+        )
+        return 1
+    return webapp_main(extra_args)
 
 
 def _cmd_status(cfg: Config) -> int:
@@ -80,7 +108,20 @@ def _cmd_ping(cfg: Config) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    # parse_known_args, not parse_args: `--webapp up` forwards whatever this
+    # parser doesn't recognize (--host, --port, --backend, --no-tls,
+    # --log-level) straight through to neo_webapp's own CLI.
+    args, extra = parser.parse_known_args(argv)
+
+    if args.webapp:
+        if args.command != "up":
+            print("[model-conn] usage: neo --webapp up")
+            return 1
+        return _cmd_webapp(extra)
+
+    if extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+
     cfg = Config.load(args.config)
 
     if args.command == "up":
