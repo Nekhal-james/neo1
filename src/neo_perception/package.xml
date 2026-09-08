@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>neo_perception</name>
+  <version>0.1.0</version>
+  <description>Person detection, pose-based gesture recognition, and gaze engagement.</description>
+  <maintainer email="funkydude450@gmail.com">Nekhal James</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <!-- Required only by the ROS node; the core is pure Python. -->
+  <exec_depend>neo_msgs</exec_depend>
+
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

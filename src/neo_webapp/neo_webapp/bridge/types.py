@@ -86,6 +86,46 @@ class NodeStatus:
 
 
 @dataclass
+class TrackView:
+    """One tracked person, in normalised frame coordinates.
+
+    Normalised (0..1) rather than pixels so the overlay lines up regardless of the
+    resolution the browser happens to be sending or displaying.
+    """
+
+    track_id: int
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    confirmed: bool = False
+    engaged: bool = False
+    gesture: str = "none"
+
+
+@dataclass
+class PerceptionView:
+    """Perception state for the Vision tab."""
+
+    available: bool = False
+    running: bool = False
+    detector: str = "none"
+    state: str = "scanning"
+    engaged: bool = False
+    target_id: int | None = None
+    person_count: int = 0
+    inference_ms: float = 0.0
+    fps: float = 0.0
+    dropped_frames: int = 0
+    last_gesture: str = "none"
+    release_reason: str = ""
+    tracks: list[TrackView] = field(default_factory=list)
+    # Normalised aim point, y positive up, matching the joystick convention.
+    aim_x: float = 0.0
+    aim_y: float = 0.0
+
+
+@dataclass
 class RobotState:
     backend: str = "mock"
     dialog_state: str = "IDLE"
@@ -95,6 +135,7 @@ class RobotState:
     system: SystemHealth = field(default_factory=SystemHealth)
     emotion: EmotionState = field(default_factory=EmotionState)
     media: MediaChannels = field(default_factory=MediaChannels)
+    perception: PerceptionView = field(default_factory=PerceptionView)
     nodes: list[NodeStatus] = field(default_factory=list)
     # Rolling counters, useful for confirming a stream is actually flowing.
     camera_fps_in: float = 0.0

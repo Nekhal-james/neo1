@@ -158,6 +158,28 @@ async def estop(request: Request, user: str = Depends(require_session)) -> dict:
     return result.to_dict()
 
 
+@router.post("/api/perception/release")
+async def release_engagement(
+    request: Request, user: str = Depends(require_session)
+) -> dict:
+    """Operator override: drop the engagement lock and go back to scanning."""
+    perception = getattr(request.app.state.bridge, "perception", None)
+    if perception is None:
+        raise HTTPException(501, "no perception attached to this bridge")
+    perception.release("panel override")
+    return {"ok": True}
+
+
+@router.post("/api/perception/reset")
+async def reset_perception(request: Request, user: str = Depends(require_session)) -> dict:
+    """Clear all tracks and identities -- useful after moving the camera."""
+    perception = getattr(request.app.state.bridge, "perception", None)
+    if perception is None:
+        raise HTTPException(501, "no perception attached to this bridge")
+    perception.reset()
+    return {"ok": True}
+
+
 @router.post("/api/media/test-tone")
 async def test_tone(request: Request, user: str = Depends(require_session)) -> dict:
     """Prove the speaker path end to end without waiting for Phase 5's TTS."""

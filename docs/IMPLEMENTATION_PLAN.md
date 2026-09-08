@@ -341,10 +341,38 @@ Do not add emotion or gaze behavior here. Do not use `RPi.GPIO`. Do not add a US
 
 ---
 
-## Phase 4 — Perception: YOLO and attention
+## Phase 4 — Perception: YOLO, gestures, and gaze engagement
 
-*Goal: Neo knows a person is there and where to look.*
-*Estimate: 4 days.*
+*Goal: Neo knows a person is there, who is asking for its attention, and when to let go.*
+*Estimate: 4 days. **Core landed early** — see 4.0.*
+
+### 4.0 Status: built ahead of Phases 1 and 3
+
+`neo_perception` is implemented and tested (64 tests), including gesture-driven
+engagement, which was **not** in the original plan. Design decisions taken there:
+
+* **One pose model, not two networks.** `yolov8n-pose` yields person boxes,
+  gesture keypoints, and a face-anchored gaze target from a single pass. A
+  dedicated hand model would roughly double per-frame cost on a Pi that only has
+  ~4 fps to spend. Object detection stays a separate model, run **on demand**.
+* **Engagement is a lock, not a follow.** Presence alone does not move the head;
+  a held raised hand does. This is what stops the robot swivelling at everyone
+  who walks past a corridor desk.
+* **Two grace periods.** "Walked out of frame" (last box on a frame edge, 0.6 s)
+  is distinguished from "the detector blinked" (open frame, 2.0 s). One grace
+  value cannot serve both without the robot either staring at doorways or
+  dropping its lock every missed frame.
+* **Static gestures only, at Pi frame rates.** A 2 Hz wave sampled at 4 fps
+  aliases; `RAISED_HAND` is the default because it survives.
+* **Core is pure Python.** Tracking, gestures, engagement and gaze import no ROS,
+  no OpenCV and no numpy, so they are tested with synthetic scenes and an
+  explicit clock — and run today inside the admin panel's Vision tab.
+
+Still outstanding for this phase: the ROS node wrapper (blocked on Phase 1
+`neo_msgs`), on-demand object detection wiring, and the Bench B measurement on
+real Pi hardware.
+
+### 4.1 Original plan
 
 ### Steps
 

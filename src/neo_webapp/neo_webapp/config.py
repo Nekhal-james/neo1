@@ -67,10 +67,22 @@ class MediaConfig:
 
 
 @dataclass
+class PerceptionConfig:
+    """Perception for the *simulated* robot, so the Vision tab works with no Pi.
+
+    On the real robot perception is a ROS node; the panel only observes it.
+    """
+
+    enabled: bool = True
+    target_fps: float = 6.0
+
+
+@dataclass
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     media: MediaConfig = field(default_factory=MediaConfig)
+    perception: PerceptionConfig = field(default_factory=PerceptionConfig)
     bridge_backend: str = "auto"
     source_path: Path | None = None
 
@@ -90,6 +102,7 @@ class Config:
         tls_raw = server_raw.get("tls", {}) or {}
         auth_raw = raw.get("auth", {}) or {}
         media_raw = raw.get("media", {}) or {}
+        perception_raw = raw.get("perception", {}) or {}
         return cls(
             server=ServerConfig(
                 host=server_raw.get("host", "0.0.0.0"),
@@ -115,6 +128,10 @@ class Config:
                 speaker_sample_rate=int(media_raw.get("speaker_sample_rate", 22050)),
                 joy_rate_hz=int(media_raw.get("joy_rate_hz", 20)),
                 joy_deadman_ms=int(media_raw.get("joy_deadman_ms", 300)),
+            ),
+            perception=PerceptionConfig(
+                enabled=bool(perception_raw.get("enabled", True)),
+                target_fps=float(perception_raw.get("target_fps", 6.0)),
             ),
             bridge_backend=(raw.get("bridge", {}) or {}).get("backend", "auto"),
         )

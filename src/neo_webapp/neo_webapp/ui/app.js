@@ -65,6 +65,8 @@ function render(s) {
   $('v-rtt').textContent = s.link.rtt_ms === null ? '—' : `${s.link.rtt_ms.toFixed(1)} ms`;
   $('v-fails').textContent = s.link.consecutive_failures;
 
+  renderPerception(s.perception);
+
   $('nodes').innerHTML = s.nodes.map((n) =>
     `<div class="row"><span class="k">${n.name}</span><span class="v">${n.state}</span></div>`).join('');
 
@@ -77,6 +79,97 @@ function render(s) {
   $('btn-estop').classList.toggle('engaged', s.head.estop);
   $('btn-estop').textContent = s.head.estop ? 'RELEASE E-STOP' : 'E-STOP';
 }
+
+// ------------------------------------------------------------- perception
+
+const STATE_LABEL = {
+  scanning: ['scanning', ''],
+  engaging: ['confirming…', 'warn'],
+  engaged: ['ENGAGED', 'good'],
+  suspended: ['suspended — holding', 'warn'],
+};
+
+function renderPerception(p) {
+  if (!p) return;
+  if (!p.available) {
+    $('v-det-backend').textContent = 'unavailable';
+    return;
+  }
+
+  const [label, cls] = STATE_LABEL[p.state] || [p.state, ''];
+  const stateEl = $('v-eng-state');
+  stateEl.textContent = label;
+  stateEl.style.color = cls === 'good' ? 'var(--good)' : cls === 'warn' ? 'var(--warn)' : '';
+
+  $('v-eng-target').textContent = p.target_id === null ? '—' : `#${p.target_id}`;
+  $('v-eng-gesture').textContent = p.last_gesture;
+  $('v-eng-release').textContent = p.release_reason || '—';
+  $('v-eng-aim').textContent = `${p.aim_x.toFixed(2)}, ${p.aim_y.toFixed(2)}`;
+
+  $('v-det-backend').textContent = p.detector;
+  $('v-det-people').textContent = p.person_count;
+  $('v-det-ms').textContent = p.inference_ms ? `${p.inference_ms.toFixed(0)} ms` : '—';
+  $('v-det-fps').textContent = p.fps ? `${p.fps.toFixed(1)} fps` : '—';
+  $('v-det-dropped').textContent = p.dropped_frames;
+
+  drawOverlay(p);
+}
+
+function drawOverlay(p) {
+  const canvas = $('vision-overlay');
+  const stage = canvas.parentElement;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  // Tracks arriving without a local stream means the robot's own camera is the
+  // source: still show the overlay rather than the "start the camera" hint.
+  stage.classList.toggle('live', !!camStream || p.tracks.length > 0);
+
+  for (const t of p.tracks) {
+    const x = t.x1 * w, y = t.y1 * h;
+    const bw = (t.x2 - t.x1) * w, bh = (t.y2 - t.y1) * h;
+
+    if (t.engaged) {
+      ctx.strokeStyle = '#3fb8af'; ctx.lineWidth = 3; ctx.setLineDash([]);
+    } else if (t.confirmed) {
+      ctx.strokeStyle = '#7d8a99'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+    } else {
+      // Unconfirmed: seen once, not yet trusted enough to be a lock candidate.
+      ctx.strokeStyle = '#4a5563'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    }
+    ctx.strokeRect(x, y, bw, bh);
+
+    const tag = `#${t.track_id}${t.gesture !== 'none' ? ' ✋' : ''}${t.engaged ? ' LOCKED' : ''}`;
+    ctx.setLineDash([]);
+    ctx.font = '600 12px ui-monospace, monospace';
+    const tw = ctx.measureText(tag).width + 10;
+    ctx.fillStyle = t.engaged ? '#3fb8af' : 'rgba(14,17,22,.8)';
+    ctx.fillRect(x, Math.max(0, y - 18), tw, 18);
+    ctx.fillStyle = t.engaged ? '#0b0e12' : '#d8e0e8';
+    ctx.fillText(tag, x + 5, Math.max(12, y - 5));
+  }
+
+  // Aim point, in the same normalised frame the head is driven from.
+  if (p.engaged && (p.aim_x || p.aim_y)) {
+    const ax = (p.aim_x + 1) / 2 * w;
+    const ay = (1 - p.aim_y) / 2 * h;
+    ctx.strokeStyle = '#3fb8af';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(ax, ay, 9, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ax - 14, ay); ctx.lineTo(ax + 14, ay);
+    ctx.moveTo(ax, ay - 14); ctx.lineTo(ax, ay + 14);
+    ctx.stroke();
+  }
+}
+
+$('btn-release').addEventListener('click', () => post('/api/perception/release'));
+$('btn-reset-tracks').addEventListener('click', () => post('/api/perception/reset'));
 
 function fmtDuration(sec) {
   const s = Math.floor(sec % 60), m = Math.floor((sec / 60) % 60), h = Math.floor(sec / 3600);
@@ -210,6 +303,9 @@ $('btn-cam').addEventListener('click', async () => {
   const video = $('preview');
   video.srcObject = camStream;
   video.style.display = 'block';
+  // Same stream feeds the Vision tab, so the overlay lines up with what the
+  // detector is actually seeing.
+  $('vision-video').srcObject = camStream;
   camWs = new WebSocket(wsUrl('/ws/camera'));
   camWs.binaryType = 'arraybuffer';
 
@@ -236,6 +332,7 @@ function stopCamera() {
   if (camStream) camStream.getTracks().forEach((t) => t.stop());
   camStream = camWs = camTimer = null;
   $('preview').style.display = 'none';
+  $('vision-video').srcObject = null;
   $('btn-cam').textContent = 'Start camera';
 }
 

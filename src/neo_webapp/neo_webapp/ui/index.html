@@ -21,7 +21,7 @@
     <button data-tab="sources" class="active">Sources</button>
     <button data-tab="system">System</button>
     <button data-tab="head">Head</button>
-    <button data-tab="vision" disabled>Vision<span class="phase">P4</span></button>
+    <button data-tab="vision">Vision</button>
     <button data-tab="audio" disabled>Audio<span class="phase">P5</span></button>
     <button data-tab="dialog" disabled>Dialog<span class="phase">P6</span></button>
     <button data-tab="data" disabled>Data<span class="phase">P7</span></button>
@@ -128,7 +128,48 @@
       </div>
     </section>
 
-    <section class="tab" id="tab-vision"><div class="stub">Camera preview with detection overlay — <code>Phase 4</code></div></section>
+    <section class="tab" id="tab-vision">
+      <div class="grid">
+        <div class="card" style="grid-column: 1 / -1; max-width: 680px">
+          <h2>Detection &amp; engagement</h2>
+          <div class="stage">
+            <video id="vision-video" autoplay muted playsinline></video>
+            <canvas id="vision-overlay"></canvas>
+            <div class="stage-empty" id="vision-empty">
+              Set the camera source to <b>webapp</b> and start the camera on the
+              Sources tab.
+            </div>
+          </div>
+          <div class="controls" style="margin-top:12px">
+            <button id="btn-release">Release lock</button>
+            <button id="btn-reset-tracks">Reset tracks</button>
+          </div>
+          <div class="hint">
+            Raise a hand and hold it for about half a second to engage. The lock
+            follows you, survives the detector dropping a frame, and releases on
+            its own once you leave the frame.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Engagement</h2>
+          <div class="row"><span class="k">State</span><span class="v" id="v-eng-state">—</span></div>
+          <div class="row"><span class="k">Target track</span><span class="v" id="v-eng-target">—</span></div>
+          <div class="row"><span class="k">Last gesture</span><span class="v" id="v-eng-gesture">—</span></div>
+          <div class="row"><span class="k">Last release</span><span class="v" id="v-eng-release">—</span></div>
+          <div class="row"><span class="k">Aim (x, y)</span><span class="v" id="v-eng-aim">—</span></div>
+        </div>
+
+        <div class="card">
+          <h2>Detector</h2>
+          <div class="row"><span class="k">Backend</span><span class="v" id="v-det-backend">—</span></div>
+          <div class="row"><span class="k">People tracked</span><span class="v" id="v-det-people">—</span></div>
+          <div class="row"><span class="k">Inference</span><span class="v" id="v-det-ms">—</span></div>
+          <div class="row"><span class="k">Capable of</span><span class="v" id="v-det-fps">—</span></div>
+          <div class="row"><span class="k">Frames dropped</span><span class="v" id="v-det-dropped">—</span></div>
+        </div>
+      </div>
+    </section>
     <section class="tab" id="tab-audio"><div class="stub">Wake-word meter, VAD view, TTS test — <code>Phase 5</code></div></section>
     <section class="tab" id="tab-dialog"><div class="stub">Transcript, replies, latency breakdown — <code>Phase 6 / 8</code></div></section>
     <section class="tab" id="tab-data"><div class="stub">Campus data editor, coverage map, unanswered questions — <code>Phase 7</code></div></section>

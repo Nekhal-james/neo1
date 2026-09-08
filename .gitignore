@@ -7,6 +7,12 @@ build/
 install/
 log/
 
+# Model weights and their sample assets: fetched on demand, not source
+*.pt
+*.onnx
+*_ncnn_model/
+bus.jpg
+
 # Python
 __pycache__/
 *.py[cod]

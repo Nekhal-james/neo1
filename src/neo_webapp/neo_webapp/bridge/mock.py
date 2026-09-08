@@ -34,9 +34,16 @@ MAX_TILT_SPEED_DEG_S = 45.0
 class MockBridge(Bridge):
     name = "mock"
 
-    def __init__(self, *, deadman_ms: int = 300, source_switch_ms: int = 250) -> None:
+    def __init__(
+        self,
+        *,
+        deadman_ms: int = 300,
+        source_switch_ms: int = 250,
+        perception=None,
+    ) -> None:
         super().__init__()
         self._state = RobotState(backend=self.name)
+        self.perception = perception
         self._state.nodes = [
             NodeStatus(name=n, state="missing")
             for n in (
@@ -64,9 +71,13 @@ class MockBridge(Bridge):
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
+        if self.perception is not None:
+            self.perception.start()
         self._task = asyncio.create_task(self._run(), name="mock-bridge-tick")
 
     async def stop(self) -> None:
+        if self.perception is not None:
+            self.perception.stop()
         if self._task is not None:
             self._task.cancel()
             try:
@@ -79,6 +90,10 @@ class MockBridge(Bridge):
 
     def snapshot(self) -> RobotState:
         self._refresh_system()
+        if self.perception is not None:
+            self._state.perception = self.perception.view(
+                running=self._state.sources.camera == "webapp"
+            )
         return self._state
 
     def _refresh_system(self) -> None:
@@ -145,6 +160,8 @@ class MockBridge(Bridge):
         while self._frame_times and self._frame_times[0] < cutoff:
             self._frame_times.pop(0)
         self._state.camera_fps_in = len(self._frame_times) / 2.0
+        if self.perception is not None:
+            self.perception.submit_jpeg(jpeg)
 
     async def publish_mic_chunk(self, pcm_s16le: bytes) -> None:
         self._mic_bytes += len(pcm_s16le)
@@ -164,15 +181,31 @@ class MockBridge(Bridge):
             await asyncio.sleep(dt)
 
     def _tick(self, dt: float) -> None:
+        """Priority arbiter: estop > manual > gaze > idle.
+
+        This is a stand-in for Phase 3's `head_behavior`, and it keeps the same
+        ordering: an operator with a hand on the joystick always outranks the robot
+        deciding where to look.
+        """
         head: HeadState = self._state.head
-        stale = (time.monotonic() - self._joy_stamp) > self._deadman_s
-        if head.estop or stale:
+        joy_fresh = (time.monotonic() - self._joy_stamp) <= self._deadman_s
+        ax = ay = 0.0
+
+        if head.estop:
             # Deadman: a stale or absent joystick means stop, not coast.
-            ax, ay = 0.0, 0.0
-            head.active_source = "estop" if head.estop else "idle"
-        else:
+            head.active_source = "estop"
+        elif joy_fresh and any(self._joy_axes):
             ax, ay = self._joy_axes
-            head.active_source = "manual" if (ax or ay) else "idle"
+            head.active_source = "manual"
+        elif self.perception is not None:
+            gx, gy = self.perception.gaze_axes()
+            if gx or gy:
+                ax, ay = gx, gy
+                head.active_source = "gaze"
+            else:
+                head.active_source = "idle"
+        else:
+            head.active_source = "idle"
 
         pan = head.pan_deg + ax * MAX_PAN_SPEED_DEG_S * dt
         tilt = head.tilt_deg + ay * MAX_TILT_SPEED_DEG_S * dt

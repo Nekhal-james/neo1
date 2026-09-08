@@ -276,3 +276,41 @@ video, canvas.preview {
 }
 
 .toggles { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+/* ---- vision stage ---- */
+
+.stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.stage video, .stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+}
+
+.stage canvas { pointer-events: none; }
+
+.stage-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--bg);
+}
+
+.stage-empty b { color: var(--accent); }
+.stage.live .stage-empty { display: none; }

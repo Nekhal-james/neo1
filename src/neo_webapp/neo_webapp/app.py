@@ -15,6 +15,7 @@ from .auth import SESSION_COOKIE, Authenticator
 from .bridge import Bridge, make_bridge
 from .config import Config
 from .media import MediaManager, media_router
+from .perception_link import PerceptionLink
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).parent / "ui"
@@ -35,9 +36,17 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
     app = FastAPI(title="Neo admin panel", version="0.1.0", lifespan=lifespan)
     app.state.config = cfg
     app.state.auth = Authenticator(cfg.auth)
-    app.state.bridge = bridge or make_bridge(
-        cfg.bridge_backend, deadman_ms=cfg.media.joy_deadman_ms
-    )
+    if bridge is None:
+        # Perception is attached to the simulated robot so the gesture-engagement
+        # stack can be exercised against a real camera with no hardware. On the
+        # real robot it runs as its own ROS node, not inside the panel.
+        link = PerceptionLink(target_fps=cfg.perception.target_fps) if cfg.perception.enabled else None
+        bridge = make_bridge(
+            cfg.bridge_backend,
+            deadman_ms=cfg.media.joy_deadman_ms,
+            perception=link,
+        )
+    app.state.bridge = bridge
     app.state.media = MediaManager(app.state.bridge)
 
     app.include_router(api_router)

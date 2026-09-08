@@ -24,6 +24,13 @@ bridge:
   # auto -> use ROS when rclpy and neo_msgs are importable, else the simulation
   backend: auto
 
+perception:
+  # Runs the real perception pipeline against the *simulated* robot, so gesture
+  # engagement can be exercised with no Pi and no servos. On the real robot,
+  # perception is a ROS node and the panel only observes it.
+  enabled: true
+  target_fps: 6.0   # a laptop can afford more than the Pi's ~4
+
 media:
   camera_max_fps: 8          # server-side cap as well as client-side
   camera_jpeg_quality: 0.6
