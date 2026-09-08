@@ -4,8 +4,26 @@ const WS_SCHEME = location.protocol === 'https:' ? 'wss' : 'ws';
 const wsUrl = (path) => `${WS_SCHEME}://${location.host}${path}`;
 const $ = (id) => document.getElementById(id);
 
-let config = { joyDeadmanMs: 300, joyRateHz: 20, micRate: 16000, speakerRate: 22050, camFps: 8 };
+// Replaced by the real values from GET /api/config as soon as it resolves;
+// these are just what's shown for the instant before that first fetch lands.
+let config = {
+  joyDeadmanMs: 300, joyRateHz: 20, micRate: 16000, speakerRate: 22050,
+  camFps: 8, camJpegQuality: 0.6,
+};
 let latest = null;
+
+async function loadConfig() {
+  const res = await fetch('/api/config');
+  if (res.status === 401) { window.location = '/login'; return; }
+  if (!res.ok) return; // keep the defaults above
+  const c = await res.json();
+  config = {
+    joyDeadmanMs: c.joy_deadman_ms, joyRateHz: c.joy_rate_hz,
+    micRate: c.mic_sample_rate, speakerRate: c.speaker_sample_rate,
+    camFps: c.camera_max_fps, camJpegQuality: c.camera_jpeg_quality,
+  };
+  $('deadman-ms').textContent = config.joyDeadmanMs;
+}
 
 // --------------------------------------------------------------- state feed
 
@@ -29,9 +47,6 @@ function setBadge(el, text, cls) {
 function render(s) {
   const dialogClass = { IDLE: '', LISTENING: 'good', THINKING: 'warn', SPEAKING: 'good', DEGRADED: 'warn', ESTOP: 'bad' };
   setBadge($('badge-dialog'), s.dialog_state, dialogClass[s.dialog_state] || '');
-  setBadge($('badge-link'),
-    s.link.up ? `link: ${s.link.active_path} ${s.link.rtt_ms ? s.link.rtt_ms.toFixed(0) + 'ms' : ''}` : 'link: down',
-    s.link.up ? 'good' : 'warn');
   setBadge($('badge-backend'), `backend: ${s.backend}`, s.backend === 'ros' ? 'good' : 'warn');
 
   // sources
@@ -60,11 +75,6 @@ function render(s) {
   $('v-temp').textContent = s.system.temp_c === null ? '—' : `${s.system.temp_c.toFixed(1)} °C`;
   $('v-uptime').textContent = fmtDuration(s.system.uptime_s);
 
-  $('v-linkup').textContent = s.link.up ? 'up' : 'down';
-  $('v-linkpath').textContent = s.link.active_path;
-  $('v-rtt').textContent = s.link.rtt_ms === null ? '—' : `${s.link.rtt_ms.toFixed(1)} ms`;
-  $('v-fails').textContent = s.link.consecutive_failures;
-
   renderPerception(s.perception);
 
   $('nodes').innerHTML = s.nodes.map((n) =>
@@ -78,6 +88,48 @@ function render(s) {
   $('v-estop').textContent = s.head.estop ? 'ENGAGED' : 'clear';
   $('btn-estop').classList.toggle('engaged', s.head.estop);
   $('btn-estop').textContent = s.head.estop ? 'RELEASE E-STOP' : 'E-STOP';
+}
+
+// ------------------------------------------------- link & dialog polling
+//
+// These come from model_conn's and intelligence's status files (see
+// dialog_status.py / link_status.py), not the 4 Hz /ws/state feed -- reading
+// them is file I/O, which doesn't belong in that loop. A slower poll here is
+// the deliberate tradeoff: badges lag by up to POLL_MS instead of never
+// reflecting reality at all.
+const POLL_MS = 3000;
+
+async function pollLinkStatus() {
+  try {
+    const res = await fetch('/api/link/status');
+    if (res.status === 401) { window.location = '/login'; return; }
+    if (!res.ok) return;
+    const { link } = await res.json();
+    setBadge($('badge-link'),
+      link.up ? `link: ${link.active_path} ${link.rtt_ms ? link.rtt_ms.toFixed(0) + 'ms' : ''}` : 'link: down',
+      link.up ? 'good' : 'warn');
+    $('v-linkup').textContent = link.up ? 'up' : 'down';
+    $('v-linkpath').textContent = link.active_path;
+    $('v-rtt').textContent = link.rtt_ms === null ? '—' : `${link.rtt_ms.toFixed(1)} ms`;
+    $('v-fails').textContent = link.consecutive_failures;
+  } catch { /* transient fetch failure; next poll retries */ }
+}
+
+async function pollDialogStatus() {
+  const el = $('v-dlg-reply');
+  if (!el) return; // dialog tab markup not present (shouldn't happen, but don't throw)
+  try {
+    const res = await fetch('/api/dialog/status');
+    if (res.status === 401) { window.location = '/login'; return; }
+    if (!res.ok) return;
+    const d = await res.json();
+    $('v-dlg-prompt').textContent = d.last_prompt || '—';
+    el.textContent = d.last_reply || '—';
+    $('v-dlg-source').textContent = d.chat_source;
+    $('v-dlg-asr').textContent = d.asr_engine || '—';
+    $('v-dlg-tts').textContent = d.tts_engine || '—';
+    $('v-dlg-updated').textContent = d.updated_at ? new Date(d.updated_at * 1000).toLocaleTimeString() : '—';
+  } catch { /* transient fetch failure; next poll retries */ }
 }
 
 // ------------------------------------------------------------- perception
@@ -320,7 +372,7 @@ $('btn-cam').addEventListener('click', async () => {
       if (blob && camWs && camWs.readyState === WebSocket.OPEN) {
         camWs.send(await blob.arrayBuffer());
       }
-    }, 'image/jpeg', 0.6);
+    }, 'image/jpeg', config.camJpegQuality);
   }, 1000 / config.camFps);
 
   $('btn-cam').textContent = 'Stop camera';
@@ -420,5 +472,9 @@ function secureContextHint(what, err) {
 
 // ------------------------------------------------------------------ boot
 
-$('deadman-ms').textContent = config.joyDeadmanMs;
+loadConfig().then(() => { $('deadman-ms').textContent = config.joyDeadmanMs; });
 connectState();
+pollLinkStatus();
+pollDialogStatus();
+setInterval(pollLinkStatus, POLL_MS);
+setInterval(pollDialogStatus, POLL_MS);

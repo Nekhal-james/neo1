@@ -8,11 +8,17 @@ from .conftest import TEST_PASSWORD
 
 PROTECTED = [
     ("get", "/api/state"),
+    ("get", "/api/config"),
     ("get", "/api/sources"),
     ("get", "/api/auth/me"),
     ("post", "/api/sources/set"),
     ("post", "/api/head/center"),
     ("post", "/api/system/estop"),
+    ("post", "/api/perception/release"),
+    ("post", "/api/perception/reset"),
+    ("post", "/api/media/test-tone"),
+    ("get", "/api/link/status"),
+    ("get", "/api/dialog/status"),
 ]
 
 

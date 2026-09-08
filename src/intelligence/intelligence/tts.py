@@ -37,5 +37,8 @@ def synthesize(text: str, cfg: Config) -> bytes:
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav_file:
-        voice.synthesize(text, wav_file)
+        # piper-tts >=1.2 split `synthesize()` into a streaming AudioChunk
+        # iterator; `synthesize_wav()` is the direct-to-wave-file call the old
+        # `synthesize(text, wav_file)` signature used to be.
+        voice.synthesize_wav(text, wav_file)
     return buf.getvalue()

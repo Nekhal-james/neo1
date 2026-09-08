@@ -82,6 +82,25 @@ async def me(user: str = Depends(require_session)) -> dict:
     return {"user": user}
 
 
+# -- config (the subset the operator UI needs to render itself correctly) --
+
+
+@router.get("/api/config")
+async def get_config(request: Request, user: str = Depends(require_session)) -> dict:
+    """Serves config.media so the UI's joystick rate, camera fps, deadman
+    display, and JPEG quality track config/webapp.yaml instead of a hardcoded
+    copy that silently drifts from what the server actually enforces."""
+    media = request.app.state.config.media
+    return {
+        "joy_deadman_ms": media.joy_deadman_ms,
+        "joy_rate_hz": media.joy_rate_hz,
+        "mic_sample_rate": media.mic_sample_rate,
+        "speaker_sample_rate": media.speaker_sample_rate,
+        "camera_max_fps": media.camera_max_fps,
+        "camera_jpeg_quality": media.camera_jpeg_quality,
+    }
+
+
 # -- state -----------------------------------------------------------------
 
 

@@ -22,10 +22,11 @@ neo --webapp setup          # sets the admin password
 neo --webapp up             # https://localhost:8443
 ```
 
-`neo --webapp up` (from the [`model_conn`](../model-conn/README.md) package)
-forwards straight into this package's own CLI, so every flag below still
-applies, e.g. `neo --webapp up --no-tls --port 8500`. `neo-webapp` is the same
-entry point called directly, if you'd rather not go through `model_conn`.
+`neo --webapp {up,setup,devcert}` (from the [`model_conn`](../model-conn/README.md)
+package) forwards straight into this package's own CLI/scripts, so every flag
+below still applies, e.g. `neo --webapp up --no-tls --port 8500`. There is no
+separate `neo-webapp`/`neo-webapp-setup`/`neo-webapp-devcert` script anymore —
+`neo --webapp ...` is the only entry point.
 
 On Windows without installing the package:
 
@@ -95,11 +96,14 @@ For unattended provisioning: `NEO_ADMIN_PASSWORD=... neo --webapp setup`.
 | POST | `/api/auth/login` \| `logout` | no \| — | session cookie |
 | GET | `/api/auth/me` | yes | current user |
 | GET | `/api/state` | yes | full robot state snapshot |
+| GET | `/api/config` | yes | media config the UI needs (deadman ms, rates, fps, jpeg quality) |
 | GET | `/api/sources` | yes | current backends |
 | POST | `/api/sources/set` | yes | `{stream, backend}` |
 | POST | `/api/head/center` | yes | recenter |
 | POST | `/api/system/estop` | yes | `{engaged}` |
 | POST | `/api/media/test-tone` | yes | prove the speaker path (mock only) |
+| GET | `/api/link/status` | yes | model_conn's link/ping stats — polled by the System tab |
+| GET | `/api/dialog/status` | yes | intelligence's last chat turn — polled by the Dialog tab |
 
 WebSockets — all authenticated **before** the handshake is accepted, so an
 unauthenticated client never holds a media channel open:

@@ -88,14 +88,7 @@ class Config:
                 idle_unload_minutes=int(host_raw.get("idle_unload_minutes", 30)),
             ),
             receiver=ReceiverConfig(
-                endpoints=[
-                    Endpoint(
-                        name=e.get("name", "eth"),
-                        host=e.get("host", ""),
-                        port=int(e.get("port", 11434)),
-                    )
-                    for e in endpoints_raw
-                ],
+                endpoints=[_endpoint_from_raw(e) for e in endpoints_raw],
                 probe_interval_s=float(receiver_raw.get("probe_interval_s", 2.0)),
                 probe_timeout_s=float(receiver_raw.get("probe_timeout_s", 1.0)),
                 ping_count=int(receiver_raw.get("ping_count", 5)),
@@ -103,6 +96,19 @@ class Config:
             tls=TlsConfig(enabled=bool(tls_raw.get("enabled", False))),
             status_file=raw.get("status_file", "var/model_conn/status.json"),
         )
+
+
+_VALID_ENDPOINT_NAMES = ("eth", "wifi")
+
+
+def _endpoint_from_raw(e: dict[str, Any]) -> Endpoint:
+    name = e.get("name", "eth")
+    if name not in _VALID_ENDPOINT_NAMES:
+        raise ValueError(
+            f"receiver.endpoints entry has name={name!r}, must be one of "
+            f"{_VALID_ENDPOINT_NAMES} -- a typo here silently breaks eth/wifi failover"
+        )
+    return Endpoint(name=name, host=e.get("host", ""), port=int(e.get("port", 11434)))
 
 
 def _config_path(explicit: str | Path | None) -> Path | None:

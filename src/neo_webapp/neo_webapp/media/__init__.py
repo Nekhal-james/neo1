@@ -1,4 +1,4 @@
 from .channels import router as media_router
-from .manager import CHANNELS, MediaManager
+from .manager import MediaManager
 
-__all__ = ["CHANNELS", "MediaManager", "media_router"]
+__all__ = ["MediaManager", "media_router"]

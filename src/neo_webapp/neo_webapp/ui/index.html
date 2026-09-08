@@ -23,7 +23,7 @@
     <button data-tab="head">Head</button>
     <button data-tab="vision">Vision</button>
     <button data-tab="audio" disabled>Audio<span class="phase">P5</span></button>
-    <button data-tab="dialog" disabled>Dialog<span class="phase">P6</span></button>
+    <button data-tab="dialog">Dialog</button>
     <button data-tab="data" disabled>Data<span class="phase">P7</span></button>
     <button data-tab="emotion" disabled>Emotion<span class="phase">P9</span></button>
     <button data-tab="logs" disabled>Logs<span class="phase">P10</span></button>
@@ -171,7 +171,32 @@
       </div>
     </section>
     <section class="tab" id="tab-audio"><div class="stub">Wake-word meter, VAD view, TTS test — <code>Phase 5</code></div></section>
-    <section class="tab" id="tab-dialog"><div class="stub">Transcript, replies, latency breakdown — <code>Phase 6 / 8</code></div></section>
+
+    <!-- Dialog -->
+    <section class="tab" id="tab-dialog">
+      <div class="grid">
+        <div class="card">
+          <h2>Last chat turn</h2>
+          <div class="row"><span class="k">You asked</span><span class="v" id="v-dlg-prompt">—</span></div>
+          <div class="row"><span class="k">Neo replied</span><span class="v" id="v-dlg-reply">—</span></div>
+          <div class="row"><span class="k">Source</span><span class="v" id="v-dlg-source">—</span></div>
+          <div class="row"><span class="k">Updated</span><span class="v" id="v-dlg-updated">—</span></div>
+          <div class="hint">
+            Polled from <code>GET /api/dialog/status</code>, written by
+            <code>neo --prompt</code> — see intelligence/README.md.
+          </div>
+        </div>
+        <div class="card">
+          <h2>Engines</h2>
+          <div class="row"><span class="k">ASR</span><span class="v" id="v-dlg-asr">—</span></div>
+          <div class="row"><span class="k">TTS</span><span class="v" id="v-dlg-tts">—</span></div>
+        </div>
+        <div class="card">
+          <div class="stub">Live transcript feed, latency breakdown — <code>Phase 6 / 8</code></div>
+        </div>
+      </div>
+    </section>
+
     <section class="tab" id="tab-data"><div class="stub">Campus data editor, coverage map, unanswered questions — <code>Phase 7</code></div></section>
     <section class="tab" id="tab-emotion"><div class="stub">Emotion state, overrides, gesture triggers — <code>Phase 9</code></div></section>
     <section class="tab" id="tab-logs"><div class="stub">Journal tail, bag recording — <code>Phase 10</code></div></section>

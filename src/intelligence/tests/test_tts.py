@@ -43,7 +43,7 @@ def test_synthesize_returns_wav_bytes(cfg, tmp_path, monkeypatch):
         def load(cls, path, config_path=None):
             return cls()
 
-        def synthesize(self, text, wav_file):
+        def synthesize_wav(self, text, wav_file):
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
             wav_file.setframerate(22050)

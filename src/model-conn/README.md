@@ -39,10 +39,25 @@ Both read `config/model_conn.yaml`'s `receiver.endpoints` (Ethernet first,
 then Wi-Fi, per plan section 0.3.2) and write the result to a local status
 file that `neo_webapp` reads — see below.
 
-`neo` also forwards to the admin panel itself: `neo --webapp up` (see
-[neo_webapp's README](../neo_webapp/README.md)) — this only works when
+`neo` also forwards to the admin panel itself — `neo --webapp {up,setup,devcert}`
+(see [neo_webapp's README](../neo_webapp/README.md)) — this only works when
 `neo_webapp` is installed alongside this package, which the root-level
-install does.
+install does. Every flag after the subcommand that `neo` itself doesn't
+recognize is forwarded to `neo_webapp`'s own CLI untouched, **including a
+`--config`** — `neo --webapp up --config panel.yaml` passes `panel.yaml` to
+`neo_webapp`, not to this package (which has its own, separate `--config` for
+`up`/`--connection:status`/`--connection:ping`/`--prompt`, described below).
+
+To test the assistant directly (see
+[intelligence's README](../intelligence/README.md)):
+
+```bash
+neo --prompt "where is CS-204"
+```
+
+Exactly one mode may be selected per invocation — `up`, `--connection:status`,
+`--connection:ping`, or `--prompt` — combining two of them is a usage error,
+not silently-picked precedence.
 
 ## Why Ollama, and only Ollama
 

@@ -15,8 +15,6 @@ from ..bridge import Bridge
 
 log = logging.getLogger(__name__)
 
-CHANNELS = ("camera", "mic", "speaker", "joy")
-
 
 class MediaManager:
     """Reference-counts open channels and mirrors them onto the robot state."""

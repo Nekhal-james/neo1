@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -75,11 +76,12 @@ def ensure_model(model_path_or_name: str, *, port: int) -> str:
         if not p.exists():
             raise OllamaError(f"model file not found: {p}")
         name = _model_name_for(model_path_or_name)
-        modelfile = p.parent / f".{name}.Modelfile"
-        modelfile.write_text(f"FROM {p}\n", encoding="utf-8")
-        subprocess.run(
-            ["ollama", "create", name, "-f", str(modelfile)], check=True
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            modelfile = Path(tmpdir) / "Modelfile"
+            modelfile.write_text(f"FROM {p}\n", encoding="utf-8")
+            subprocess.run(
+                ["ollama", "create", name, "-f", str(modelfile)], check=True
+            )
         return name
 
     name = model_path_or_name

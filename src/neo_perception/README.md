@@ -88,7 +88,8 @@ Tests need nothing but pytest:
 python -m pytest -q
 ```
 
-The real detector needs the extra:
+The real detector needs the extra, installed from the repo root (this package
+has no `setup.py` of its own — see the [top-level README](../../README.md)):
 
 ```bash
 pip install -e ".[detector,dev]"

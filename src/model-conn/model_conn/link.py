@@ -19,7 +19,7 @@ from typing import Callable, Literal
 
 from .config import Endpoint
 
-PathName = Literal["eth", "wifi", "none"]
+ActivePath = Literal["eth", "wifi", "none"]
 
 Transport = Callable[[str, int, float], float]
 """(host, port, timeout_s) -> elapsed_ms. Raises on failure."""
@@ -74,7 +74,7 @@ class LinkStatus:
     """Mirrors neo_webapp.bridge.types.LinkHealth field-for-field."""
 
     up: bool = False
-    active_path: PathName = "none"
+    active_path: ActivePath = "none"
     rtt_ms: float | None = None
     consecutive_failures: int = 0
 
@@ -128,7 +128,7 @@ class PingStats:
     rtt_min_ms: float | None = None
     rtt_avg_ms: float | None = None
     rtt_max_ms: float | None = None
-    active_path: PathName = "none"
+    active_path: ActivePath = "none"
 
 
 def run_ping(
@@ -147,7 +147,7 @@ def run_ping(
     *last* successful sample -- good enough for a human-facing ping summary.
     """
     rtts: list[float] = []
-    active_path: PathName = "none"
+    active_path: ActivePath = "none"
     received = 0
 
     for i in range(count):
