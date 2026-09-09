@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import tls
 from .config import Config
+from .status_store import HOST_HEARTBEAT_S, write_host_status
 
 log = logging.getLogger("model_conn.ollama")
 
@@ -143,26 +144,77 @@ def up(cfg: Config, model_override: str | None) -> int:
         from .tls_proxy import start_proxy_thread
 
         start_proxy_thread(cfg)
-        print(
-            f"[model-conn] serving '{model_name}' behind mTLS at "
-            f"https://{cfg.host.bind_host}:{cfg.host.ollama_port}"
-        )
+        endpoint = f"https://{cfg.host.bind_host}:{cfg.host.ollama_port}"
+        print(f"[model-conn] serving '{model_name}' behind mTLS at {endpoint}")
     else:
-        print(f"[model-conn] serving '{model_name}' at http://{ollama_host}:{ollama_port}")
+        endpoint = f"http://{ollama_host}:{ollama_port}"
+        print(f"[model-conn] serving '{model_name}' at {endpoint}")
     print("[model-conn] press Ctrl-C to stop watching (ollama keeps running)")
 
-    if proc is None:
-        # Already running before we got here -- nothing to tail, just idle.
-        try:
+    stop_heartbeat = _start_host_heartbeat(
+        cfg,
+        model_name=model_name,
+        model_path=model,
+        endpoint=endpoint,
+    )
+    try:
+        if proc is None:
+            # Already running before we got here -- nothing to tail, just idle.
             while True:
                 time.sleep(1.0)
-        except KeyboardInterrupt:
-            return 0
-
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            print(line, end="")
+        else:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                print(line, end="")
     except KeyboardInterrupt:
         pass
+    finally:
+        stop_heartbeat()
     return 0
+
+
+def _start_host_heartbeat(
+    cfg: Config, *, model_name: str, model_path: str, endpoint: str
+):
+    """Publish what we are serving, and keep saying so.
+
+    A heartbeat rather than a single write, because the interesting question a
+    reader asks is "is a model up *now*". A one-shot file would keep claiming
+    the model was up long after this process was killed, and killed is the
+    normal way a foreground `up` ends.
+
+    Returns a callable that marks the host stopped and joins the thread.
+    """
+    import threading
+
+    path = cfg.host_status_path
+    stopping = threading.Event()
+
+    def publish(serving: bool) -> None:
+        write_host_status(
+            serving=serving,
+            model_name=model_name,
+            model_path=model_path,
+            endpoint=endpoint,
+            tls_enabled=cfg.tls.enabled,
+            path=path,
+        )
+
+    publish(True)
+    log.info("publishing host status to %s", path)
+
+    def beat() -> None:
+        while not stopping.wait(HOST_HEARTBEAT_S):
+            publish(True)
+
+    thread = threading.Thread(target=beat, name="host-status", daemon=True)
+    thread.start()
+
+    def stop() -> None:
+        stopping.set()
+        thread.join(timeout=1.0)
+        # Makes a clean Ctrl-C visible to the panel immediately, instead of
+        # after the staleness timeout.
+        publish(False)
+
+    return stop

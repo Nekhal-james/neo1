@@ -18,8 +18,8 @@ Four packages under `src/` are implemented and tested; the rest of the plan
 
 | Package | Implements | Status |
 |---|---|---|
-| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources/System/Head, Link, and Dialog state live; rest are stubs filled in by later phases |
-| [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; runnable standalone or driven from the webapp's Vision tab |
+| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, and Dialog tabs live; Audio/Data/Emotion/Logs are stubs filled in by later phases |
+| [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification |
 | [`model_conn`](src/model-conn/README.md) | Phase 6 (partial) — the off-board LLM host/receiver link | CLI for serving the model (host) and checking the link (receiver); real mTLS via a private CA (`neo --tls init`) |
 | [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; local Vosk STT and Piper TTS wired up; RAG data folder and system prompt are placeholders |
 
@@ -27,6 +27,28 @@ All four run with no Pi, no ROS, and no servos attached — `neo_webapp` via a
 `MockBridge` that simulates the robot, `neo_perception` against any camera
 the panel is using, `model_conn`/`intelligence` against whatever endpoints
 you point them at.
+
+Roughly 313 tests across the four packages. Run each from inside its own
+directory (`cd src/neo_webapp && python -m pytest -q`) — the four
+`tests/conftest.py` files collide if you point pytest at `src/` as a whole.
+
+### What the robot can currently do
+
+- **See you.** Person detection and tracking from a single `yolov8n-pose` pass,
+  at the Pi's ~4 fps working point.
+- **Wait to be asked.** Presence alone does not move the head. Show a palm and
+  hold it for about half a second and it locks on; it follows you, survives the
+  detector dropping a frame, and releases itself when you leave the frame or
+  turn your back — three causes, three different timings.
+- **Name what you hold up.** "What is this?" runs a second model once, on one
+  frame, ranked so the answer is the thing being presented rather than the
+  furniture behind it.
+- **Answer questions**, through the panel or `neo --prompt`, with the model when
+  one is reachable and a degraded reply when not — and with one line of camera
+  context attached, which is what makes "what am I holding" answerable at all.
+
+Not yet: it cannot move a real servo, hear a wake word, or answer a campus
+question from real data. See *Not built yet* below.
 
 ## Repo layout
 
@@ -91,6 +113,17 @@ This routes through `model_conn`'s link the same way `--connection:status`
 does; with no reachable host it prints a degraded-mode message instead of
 crashing. For local speech I/O (`pip install -e ".[dev,voice]"` to get Vosk
 and Piper), see [src/intelligence/README.md](src/intelligence/README.md).
+
+The admin panel is a client of that same path, not just an observer of it. With
+`neo --model … up` running, the panel's **Dialog** tab shows what is being
+served (model name, endpoint, mTLS or plain) and lets you ask it questions
+directly — the reply, its source, and the latency all come back in the browser,
+and the shared status file updates either way round.
+
+It also catches a mismatch that is otherwise silent: `chat.model_name` in
+`config/intelligence.yaml` has to match the name the host registered in Ollama.
+Nothing enforces that, and getting it wrong produces a degraded reply with no
+visible cause, so the panel says so and tells you the name to set.
 
 Set up mutual TLS for the off-board link once (`neo --tls init` generates a
 private CA plus a server cert for the host and a client cert for the Pi —

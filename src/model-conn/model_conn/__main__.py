@@ -84,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="receiver: run several probes and print latency/loss stats",
     )
     p.add_argument(
+        "--vision:status",
+        dest="vision_status",
+        action="store_true",
+        help="print what the camera currently sees (needs the panel running)",
+    )
+    p.add_argument(
         "--webapp",
         action="store_true",
         help="run the admin panel instead of the model link -- see 'neo --webapp'",
@@ -230,6 +236,39 @@ def _cmd_tls(subcommand: str, cfg: Config) -> int:
     return 1
 
 
+def _cmd_vision_status() -> int:
+    """`neo --vision:status` -- read neo_perception's status file.
+
+    The camera belongs to whichever process runs perception (today `neo --webapp
+    up`), so this reads the file that process publishes rather than opening a
+    camera of its own. Mirrors `--connection:status`, which reads model_conn's.
+    """
+    try:
+        from neo_perception.status_store import STATUS_PATH, read_status
+    except ImportError as exc:
+        print(f"[model-conn] could not import neo_perception: {exc}")
+        print('[model-conn] pip install -e ".[detector]" from the repo root')
+        return 1
+
+    vision = read_status()
+    if not vision.fresh:
+        age = "never written" if vision.age_s is None else f"{vision.age_s:.0f}s old"
+        print(f"STALE  no live vision ({age})")
+        print(f"       {STATUS_PATH}")
+        print("       start it with: neo --webapp up")
+        return 1
+    if not vision.available:
+        print("DOWN   panel is running but perception is unavailable")
+        print('       pip install -e ".[detector]" from the repo root')
+        return 1
+
+    print(f"UP     {vision.describe()}")
+    print(f"       state={vision.state} facing={vision.target_facing}")
+    if vision.objects:
+        print(f"       last identified: {', '.join(vision.objects[:3])}")
+    return 0
+
+
 def _cmd_prompt(text: str, cfg: Config) -> int:
     """Ask the assistant directly -- the test path for `neo --prompt`."""
     try:
@@ -278,10 +317,15 @@ def main(argv: list[str] | None = None) -> int:
         "up": args.command == "up",
         "connection:status": args.connection_status,
         "connection:ping": args.connection_ping,
+        "vision:status": args.vision_status,
     }
     selected = [name for name, on in modes.items() if on]
     if len(selected) > 1:
         parser.error(f"choose only one of: {', '.join(selected)} (got {len(selected)})")
+
+    # Reads a status file only: no config, no link, nothing to set up.
+    if modes["vision:status"]:
+        return _cmd_vision_status()
 
     cfg = Config.load(args.config)
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -14,8 +15,14 @@ from .api import api_router
 from .auth import SESSION_COOKIE, Authenticator
 from .bridge import Bridge, make_bridge
 from .config import Config
+from .link_status import read_link_status
 from .media import MediaManager, media_router
 from .perception_link import PerceptionLink
+
+try:
+    from neo_perception.status_store import write_status as write_vision_status
+except ImportError:  # pragma: no cover - perception is an optional extra
+    write_vision_status = None
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).parent / "ui"
@@ -24,13 +31,77 @@ UI_DIR = Path(__file__).parent / "ui"
 def create_app(config: Config | None = None, bridge: Bridge | None = None) -> FastAPI:
     cfg = config or Config.load()
 
+    def refresh_link(app: FastAPI) -> None:
+        """Keep RobotState.link in step with what /api/link/status reports.
+
+        Without this the field ships in every 4 Hz state snapshot permanently
+        reading "down, 0 failures" while the route beside it has the real
+        numbers -- two sources of truth for one fact, one of them always wrong.
+
+        Refreshed here, at 1 Hz, rather than in `snapshot()`: reading it is file
+        I/O, which is exactly what the state broadcast loop must not do. The ROS
+        backend will fill the same field from `/link/health` instead.
+        """
+        link, _ping = read_link_status()
+        app.state.bridge.snapshot().link = link
+
+    async def publish_vision_status(app: FastAPI) -> None:
+        """Mirror what the camera sees into var/perception/status.json, and keep
+        the file-backed parts of RobotState current.
+
+        Its own slow task rather than part of the 4 Hz state broadcast: this is
+        file I/O, and the readers (`neo --prompt`, `neo --vision:status`) are
+        answering human-paced questions, not driving a control loop.
+        """
+        while True:
+            try:
+                refresh_link(app)
+            except Exception:
+                log.exception("link status refresh failed")
+            if write_vision_status is None:
+                await asyncio.sleep(cfg.perception.status_interval_s)
+                continue
+            try:
+                view = app.state.bridge.snapshot().perception
+                write_vision_status(
+                    available=view.available,
+                    running=view.running,
+                    detector=view.detector,
+                    state=view.state,
+                    engaged=view.engaged,
+                    target_id=view.target_id,
+                    target_facing=view.target_facing,
+                    person_count=view.person_count,
+                    last_gesture=view.last_gesture,
+                    release_reason=view.release_reason,
+                    engage_gesture=view.engage_gesture,
+                    identify_seq=view.identify.seq,
+                    identify_best=view.identify.best,
+                    identify_error=view.identify.error,
+                    identify_guesses=[
+                        {
+                            "label": g.label,
+                            "confidence": g.confidence,
+                            "prominence": g.prominence,
+                        }
+                        for g in view.identify.guesses
+                    ],
+                )
+            except Exception:
+                log.exception("vision status write failed")
+            await asyncio.sleep(cfg.perception.status_interval_s)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await app.state.bridge.start()
         log.info("admin panel up: bridge=%s", app.state.bridge.name)
+        publisher = asyncio.create_task(publish_vision_status(app), name="vision-status")
         try:
             yield
         finally:
+            publisher.cancel()
+            with suppress(asyncio.CancelledError):
+                await publisher
             await app.state.bridge.stop()
 
     app = FastAPI(title="Neo admin panel", version="0.1.0", lifespan=lifespan)

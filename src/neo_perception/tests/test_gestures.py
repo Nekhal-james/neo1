@@ -21,12 +21,67 @@ def test_arms_down_is_no_gesture(clock):
     assert current == {}
 
 
-def test_raised_hand_is_detected(clock):
+def test_a_presented_palm_is_detected(clock):
     recognizer = GestureRecognizer()
     tracks = track_for(person(cx=320, hand_raised=True), clock)
     current, events = recognizer.update(tracks, clock.now)
-    assert current[tracks[0].track_id] is GestureKind.RAISED_HAND
+    assert current[tracks[0].track_id] is GestureKind.OPEN_PALM
     assert len(events) == 1
+
+
+class TestPalmVersusRaisedHand:
+    """The verticality check is the whole point of OPEN_PALM.
+
+    A hand above the shoulder is a weak signal -- stretching, reaching for a
+    shelf and scratching your head all produce it. Requiring the forearm to be
+    roughly vertical is what separates "I want your attention" from those.
+    """
+
+    def test_arm_thrown_out_sideways_is_not_a_palm(self, clock):
+        recognizer = GestureRecognizer()
+        tracks = track_for(person(cx=320, arm_out=True), clock)
+        current, _ = recognizer.update(tracks, clock.now)
+        assert current[tracks[0].track_id] is GestureKind.RAISED_HAND
+
+    def test_a_sideways_arm_does_not_engage(self, clock, frame):
+        """The behaviour that matters: a stretch must not capture the robot."""
+        from neo_perception.detector import MockDetector, ScriptedFrame
+        from neo_perception.pipeline import PerceptionPipeline, PipelineConfig
+        from neo_perception.tracker import TrackerConfig
+
+        detector = MockDetector()
+        pipeline = PerceptionPipeline(
+            PipelineConfig(tracker=TrackerConfig(min_hits=1)), detector
+        )
+        for _ in range(10):
+            detector.frames = [ScriptedFrame([person(cx=320, arm_out=True)])]
+            detector.index = 0
+            result = pipeline.process(frame, clock.tick())
+        assert result.attention.engaged is False
+
+    def test_a_vertical_forearm_does_engage(self, clock, frame):
+        from neo_perception.detector import MockDetector, ScriptedFrame
+        from neo_perception.pipeline import PerceptionPipeline, PipelineConfig
+        from neo_perception.tracker import TrackerConfig
+
+        detector = MockDetector()
+        pipeline = PerceptionPipeline(
+            PipelineConfig(tracker=TrackerConfig(min_hits=1)), detector
+        )
+        for _ in range(10):
+            detector.frames = [ScriptedFrame([person(cx=320, hand_raised=True)])]
+            detector.index = 0
+            result = pipeline.process(frame, clock.tick())
+        assert result.attention.engaged is True
+
+    def test_palm_detection_is_scale_invariant(self, clock):
+        recognizer = GestureRecognizer()
+        for scale in (45.0, 100.0, 220.0):
+            tracks = track_for(person(cx=320, scale=scale, hand_raised=True), clock)
+            current, _ = recognizer.update(tracks, clock.tick())
+            assert current[tracks[0].track_id] is GestureKind.OPEN_PALM, (
+                f"palm missed at scale {scale}"
+            )
 
 
 def test_the_event_is_edge_triggered(clock):
@@ -110,4 +165,4 @@ class TestWave:
                 [person(cx=320, hand_raised=True)], clock.tick(0.1)
             )
             current, _ = recognizer.update(tracks, clock.now)
-        assert current[tracks[0].track_id] is GestureKind.RAISED_HAND
+        assert current[tracks[0].track_id] is GestureKind.OPEN_PALM

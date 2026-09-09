@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .types import BBox, Detection, Track
+from .types import Detection, Track
 
 
 @dataclass

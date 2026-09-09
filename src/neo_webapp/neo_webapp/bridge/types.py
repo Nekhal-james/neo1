@@ -138,6 +138,45 @@ class TrackView:
     confirmed: bool = False
     engaged: bool = False
     gesture: str = "none"
+    facing: str = "unknown"
+
+
+@dataclass
+class ObjectGuessView:
+    """One candidate answer to "what is this?"."""
+
+    label: str
+    confidence: float
+    prominence: float
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+
+@dataclass
+class IdentifyView:
+    """Result of the most recent identify request."""
+
+    pending: bool = False
+    seq: int = 0
+    """Increments per completed request, so the UI can tell a fresh answer from
+    a stale one without comparing labels."""
+
+    error: str = ""
+    guesses: list[ObjectGuessView] = field(default_factory=list)
+
+    best: str = field(init=False, default="")
+    """The top-ranked label, or "".
+
+    A real field rather than a property: `RobotState.to_dict()` is `asdict()`,
+    which drops properties silently, so a property here would be missing from
+    /api/state and /ws/state with no error -- and `best` is the one field of
+    this view a consumer actually wants.
+    """
+
+    def __post_init__(self) -> None:
+        self.best = self.guesses[0].label if self.guesses else ""
 
 
 @dataclass
@@ -156,6 +195,12 @@ class PerceptionView:
     dropped_frames: int = 0
     last_gesture: str = "none"
     release_reason: str = ""
+    target_facing: str = "unknown"
+    engage_gesture: str = "open_palm"
+    """What the robot is actually waiting to see, so the panel's instruction to
+    the operator can never drift from the configured gesture."""
+
+    identify: IdentifyView = field(default_factory=IdentifyView)
     tracks: list[TrackView] = field(default_factory=list)
     # Normalised aim point, y positive up, matching the joystick convention.
     aim_x: float = 0.0

@@ -141,13 +141,16 @@
             </div>
           </div>
           <div class="controls" style="margin-top:12px">
+            <button id="btn-identify">What is this?</button>
             <button id="btn-release">Release lock</button>
             <button id="btn-reset-tracks">Reset tracks</button>
           </div>
+          <div class="answer" id="identify-answer" hidden></div>
           <div class="hint">
-            Raise a hand and hold it for about half a second to engage. The lock
-            follows you, survives the detector dropping a frame, and releases on
-            its own once you leave the frame.
+            Show your palm — hand up, forearm vertical — and hold it for about
+            half a second to engage. The lock follows you, survives the detector
+            dropping a frame, and releases on its own when you leave the frame
+            or turn your back.
           </div>
         </div>
 
@@ -155,6 +158,8 @@
           <h2>Engagement</h2>
           <div class="row"><span class="k">State</span><span class="v" id="v-eng-state">—</span></div>
           <div class="row"><span class="k">Target track</span><span class="v" id="v-eng-target">—</span></div>
+          <div class="row"><span class="k">Target facing</span><span class="v" id="v-eng-facing">—</span></div>
+          <div class="row"><span class="k">Waiting for</span><span class="v" id="v-eng-wants">—</span></div>
           <div class="row"><span class="k">Last gesture</span><span class="v" id="v-eng-gesture">—</span></div>
           <div class="row"><span class="k">Last release</span><span class="v" id="v-eng-release">—</span></div>
           <div class="row"><span class="k">Aim (x, y)</span><span class="v" id="v-eng-aim">—</span></div>
@@ -175,6 +180,31 @@
     <!-- Dialog -->
     <section class="tab" id="tab-dialog">
       <div class="grid">
+        <div class="card" style="grid-column: 1 / -1; max-width: 680px">
+          <h2>Ask Neo</h2>
+          <div class="ask-row">
+            <input id="ask-input" type="text" autocomplete="off"
+                   placeholder="where is CS-204">
+            <button id="btn-ask">Ask</button>
+          </div>
+          <div class="answer" id="ask-answer" hidden></div>
+          <div class="hint" id="ask-hint">
+            Goes through the same path as <code>neo --prompt</code>, so it reaches
+            whatever <code>neo --model … up</code> is serving — and falls back to
+            the same degraded reply when nothing is.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Model host</h2>
+          <div class="row"><span class="k">Status</span><span class="v" id="v-mdl-status">—</span></div>
+          <div class="row"><span class="k">Serving</span><span class="v" id="v-mdl-name">—</span></div>
+          <div class="row"><span class="k">Endpoint</span><span class="v" id="v-mdl-endpoint">—</span></div>
+          <div class="row"><span class="k">Transport</span><span class="v" id="v-mdl-tls">—</span></div>
+          <div class="row"><span class="k">Chat asks for</span><span class="v" id="v-mdl-configured">—</span></div>
+          <div class="answer bad" id="mdl-warning" hidden></div>
+        </div>
+
         <div class="card">
           <h2>Last chat turn</h2>
           <div class="row"><span class="k">You asked</span><span class="v" id="v-dlg-prompt">—</span></div>
@@ -182,8 +212,9 @@
           <div class="row"><span class="k">Source</span><span class="v" id="v-dlg-source">—</span></div>
           <div class="row"><span class="k">Updated</span><span class="v" id="v-dlg-updated">—</span></div>
           <div class="hint">
-            Polled from <code>GET /api/dialog/status</code>, written by
-            <code>neo --prompt</code> — see intelligence/README.md.
+            Polled from <code>GET /api/dialog/status</code>, written by whichever
+            asked last — <code>neo --prompt</code> or the box above. Both go
+            through the same path, so this reflects either.
           </div>
         </div>
         <div class="card">

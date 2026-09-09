@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, status
@@ -19,11 +20,20 @@ from ..bridge import BACKENDS, STREAMS
 from ..bridge.mock import MockBridge
 from ..dialog_status import read_dialog_status
 from ..link_status import read_link_status
+from ..model_status import read_model_status
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 STATE_HZ = 4.0
+
+MAX_PROMPT_CHARS = 2000
+"""A receptionist question, not an essay. Bounds how long a worker thread can
+be tied up by one request."""
+
+IDENTIFY_TIMEOUT_S = 6.0
+"""Generous on purpose: the object model is loaded lazily, so the very first
+question also pays for reading weights off an SD card."""
 
 
 # -- auth ------------------------------------------------------------------
@@ -202,6 +212,47 @@ async def reset_perception(request: Request, user: str = Depends(require_session
     return {"ok": True}
 
 
+@router.post("/api/perception/identify")
+async def identify_object(request: Request, user: str = Depends(require_session)) -> dict:
+    """"What is this?" -- run the object model against the next live frame.
+
+    Waits for the answer rather than returning immediately: the caller asked a
+    question, and a 202 plus a polling loop would push that wait into every
+    client for no benefit. The wait is bounded, and a timeout is reported as a
+    timeout rather than as an empty (and therefore wrong) answer.
+    """
+    perception = getattr(request.app.state.bridge, "perception", None)
+    if perception is None:
+        raise HTTPException(501, "no perception attached to this bridge")
+
+    view = request.app.state.bridge.snapshot().perception
+    if not view.available:
+        raise HTTPException(503, "perception unavailable")
+
+    target_seq = perception.request_identify()
+    deadline = time.monotonic() + IDENTIFY_TIMEOUT_S
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+        current = perception.view(running=True).identify
+        if current.seq >= target_seq:
+            if current.error:
+                raise HTTPException(500, f"identification failed: {current.error}")
+            return {
+                "ok": True,
+                "best": current.best,
+                "guesses": [asdict(g) for g in current.guesses],
+            }
+
+    # Almost always means no frames are arriving -- the camera is off, or the
+    # source is set to hardware with nothing behind it. Say that, rather than
+    # reporting "nothing recognised", which would be a different problem.
+    raise HTTPException(
+        504,
+        "no frame was identified in time -- is the camera running and is the "
+        "camera source set to webapp?",
+    )
+
+
 @router.post("/api/media/test-tone")
 async def test_tone(request: Request, user: str = Depends(require_session)) -> dict:
     """Prove the speaker path end to end without waiting for Phase 5's TTS."""
@@ -237,6 +288,57 @@ async def dialog_status(user: str = Depends(require_session)) -> dict:
     than folded into /api/state or /ws/state.
     """
     return asdict(read_dialog_status())
+
+
+@router.get("/api/model/status")
+async def model_status(user: str = Depends(require_session)) -> dict:
+    """What `neo --model ... up` is serving right now -- see ../model_status.py."""
+    return asdict(read_model_status())
+
+
+@router.post("/api/dialog/ask")
+async def dialog_ask(request: Request, user: str = Depends(require_session)) -> dict:
+    """Ask the model from the panel, over the same path `neo --prompt` uses.
+
+    This is what makes the panel a client of `neo --model ... up` rather than a
+    read-only observer of whatever the CLI last did. Same code path deliberately:
+    `intelligence.chat.ask` owns endpoint resolution, mTLS, the degraded reply,
+    and writing the dialog status file, so the panel gets all of that for free
+    and cannot drift from the CLI's behaviour.
+    """
+    payload = await request.json()
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        raise HTTPException(400, "text must not be empty")
+    if len(text) > MAX_PROMPT_CHARS:
+        raise HTTPException(413, f"text must be under {MAX_PROMPT_CHARS} characters")
+
+    try:
+        from intelligence.chat import ask
+        from intelligence.config import Config as IntelligenceConfig
+        from model_conn.config import Config as ModelConnConfig
+    except ImportError as exc:
+        raise HTTPException(501, f"intelligence is not installed: {exc}") from exc
+
+    def run() -> dict:
+        # ask() does blocking HTTP with `requests`, so it goes to a worker
+        # thread -- on the event loop it would stall every other client for the
+        # length of the model's reply.
+        result = ask(
+            text, cfg=IntelligenceConfig.load(), mc_cfg=ModelConnConfig.load()
+        )
+        return {
+            "reply": result.reply,
+            "source": result.source,
+            "host": result.host,
+            "latency_ms": result.latency_ms,
+        }
+
+    try:
+        return await asyncio.to_thread(run)
+    except Exception as exc:  # noqa: BLE001 -- report, never 500 the panel
+        log.exception("chat request failed")
+        raise HTTPException(502, f"chat failed: {exc}") from exc
 
 
 # -- health (unauthenticated, deliberately says nothing sensitive) ---------

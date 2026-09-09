@@ -4,9 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-The repository is currently empty apart from `README.md` — there is no source code, build system, or test suite yet. Everything below is the intended design, provided by the project owner. When scaffolding, prefer creating the structure described here over inventing a new one, and update this file as real commands and layout appear.
+Four packages under `src/` are implemented and tested (~313 tests): `neo_webapp`
+(admin panel), `neo_perception` (detection/gestures/engagement), `model_conn`
+(the `neo` CLI and off-board link), and `intelligence` (prompts, chat, ASR/TTS).
+[README.md](README.md) tracks what each one currently does.
 
-The build order, package layout, and per-phase acceptance criteria live in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md). Follow its phase ordering unless told otherwise, and keep it updated as phases land.
+Not built: motion (the servo driver), the wake word, the vectorless campus-data
+engine, and the emotion layer. Everything below describes the design those must
+follow, including the parts not yet written.
+
+Install is `pip install -e ".[dev,detector]"` from the repo root — one `setup.py`
+covers all four packages. Tests run **per package**, from inside its own
+directory; the four `tests/conftest.py` files collide otherwise.
+
+The build order, per-phase acceptance criteria, and the reasoning behind the
+phase ordering live in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+Follow that ordering unless told otherwise, and keep it updated as phases land.
 
 ## Project: Neo
 
@@ -25,7 +38,8 @@ It is head-only for now (pan/tilt), wake-word gated, and has a web app that is b
 - **Vectorless RAG** for the college classroom data. No embedding store/vector DB: retrieval is over the structured classroom/location dataset directly (lookup/filter/prompt-stuffing). Do not introduce a vector database to "fix" retrieval without discussing it.
 - **Campus data arrives incrementally** and is edited through the admin panel, not in code. The system must be correct at ten rooms and at five hundred: retrieval is coverage-aware, distinguishing "that room isn't in my directory" from "I haven't learned that block yet", and never inventing a room.
 - **YOLO detection** for person and object, running on the Pi camera feed. This drives both presence ("someone approached the desk") and the head's gaze target. The continuous pass is a **pose** model (`yolov8n-pose`), not a plain detector: one inference gives person boxes, the COCO-17 keypoints that gestures are derived from, and a face-anchored gaze target. A second network for hands would roughly double per-frame cost on a Pi that only has ~4 fps to spend. Object detection is a separate model and runs **on demand**, not continuously.
-- **Gaze engagement is a lock, not a follow.** Presence alone does not move the head; a person who raises a hand and holds it does. The lock survives dropped frames and occlusion, and releases itself when they leave. Distinguishing "walked out of frame" (short grace) from "the detector blinked" (long grace) is load-bearing — a single grace value makes the robot either stare at doorways or drop its lock every missed frame. Only static gestures are reliable at Pi frame rates; a wave aliases at 4 fps.
+- **Gaze engagement is a lock, not a follow.** Presence alone does not move the head; a person who shows a palm (hand up, forearm vertical) and holds it does. The lock survives dropped frames and occlusion, and releases itself on three distinct signals with three different timings — walked out of frame (short grace), the detector blinked (long grace), and turned their back (medium). Collapsing those into one timeout makes the robot either stare at doorways or drop its lock every missed frame. Facing is derived from keypoints (COCO labels sides from the person's own frame, so shoulder parity inverts when they turn around) — no extra model. Only static gestures are reliable at Pi frame rates; a wave aliases at 4 fps. COCO-17 has no finger keypoints, so "palm" is a pose, not a hand shape.
+- **Object identification is request-driven.** "What is this?" runs a second model once, on one frame, and ranks by `centrality² × √area` so the answer is the thing being held up rather than the largest thing in shot. Never run it continuously — it roughly doubles per-frame cost.
 - **Motion:** two servos, X (pan) and Y (tilt), moving the head/camera, driven over I2C via a PCA9685 (not Pi GPIO PWM) from a separate 5V supply. Two control paths feed the same servo node — the emotion system and a manual joystick. The joystick is **virtual, in the web app**, so it is network-mediated: it needs a staleness deadman, and a dropped connection must stop the head rather than leave it driving.
 - **Emotion layer:** an emotional state modulates head movement (idle motion, gaze, gesture style). It is a movement modifier, not a separate actuator path.
 - **Wake word "NEO":** Neo is silent and non-responsive until the wake phrase fires. Any audio/dialogue work must respect this gate — the wake-word detector is upstream of ASR and the LLM, not a filter applied afterwards.
@@ -40,6 +54,33 @@ Camera, microphone, and speaker each have two possible backends:
 This choice must be runtime-configurable per stream, not a build-time flag or a fork of the node. Node logic downstream of a source must not care which backend is active.
 
 Note that browsers only grant camera and microphone access in a secure context, so the admin panel **must** be served over HTTPS for the webapp backends to work from any device other than the Pi itself. This makes TLS a functional requirement, not just a hardening step.
+
+## Cross-process state: the `var/` status files
+
+`neo --webapp up`, `neo --model ... up` and `neo --prompt` are separate processes,
+started in any order, any of which may be absent. They share state through
+atomically-replaced JSON files under `var/` — one per producing package
+(`model_conn` link, `intelligence` dialog, `neo_perception` vision), each owning
+its own schema.
+
+This is deliberate, not a stopgap. A missing or stale file is a state every reader
+must handle anyway; a socket that is not listening yet is not. Readers must treat
+a stale file as "that process is not running" rather than as current state — hence
+the freshness check, distinct from availability.
+
+It is what lets `neo --prompt "what is this"` answer from a camera owned by a
+different process, and what lets the panel show whether `neo --model … up` is
+serving without being on that machine's terminal.
+
+Two rules for writers: **heartbeat, don't write once** (a one-shot file keeps
+claiming a process is alive after it is killed, and killed is how foreground
+commands normally end), and **mark a clean shutdown explicitly** so it is visible
+immediately rather than after the staleness timeout.
+
+The panel is a *client* of these processes, not only an observer: `POST
+/api/dialog/ask` goes through `intelligence.chat.ask`, the same path as `neo
+--prompt`, so endpoint resolution, mTLS, the degraded reply and status-file
+writing cannot drift between the two surfaces.
 
 ## Web app = admin panel
 

@@ -10,10 +10,14 @@ plus gesture-driven engagement, which was added after the plan was written.
 
 1. Someone walks up. They are detected and tracked, but the head does not follow —
    presence alone is not a request for attention.
-2. They **raise a hand** and hold it for about half a second. The head locks on.
+2. They **show a palm** — hand up, forearm vertical — and hold it for about half a
+   second. The head locks on.
 3. The lock **follows them** around the frame, and survives the detector dropping
    a frame or somebody walking in front of them.
-4. They **leave** — the lock releases on its own, and the next person can engage.
+4. They **leave, or turn their back** — the lock releases on its own, and the next
+   person can engage.
+5. They hold something up and **ask what it is** — a second model runs, once, on
+   that frame.
 
 ## One model, not two
 
@@ -37,35 +41,92 @@ than continuous, and its cost is paid only when something asks.
 > `WAVE` is implemented and works when the pipeline is fast enough, but
 > `RAISED_HAND` is the default engage gesture because it survives the Pi.
 
-## Two grace periods, not one
+## Palm, not just "hand up"
 
-"The target vanished" has two very different causes, and treating them alike makes
-the robot feel broken either way:
+`RAISED_HAND` (wrist above shoulder) is a weak signal: stretching, reaching for a
+shelf and scratching your head all produce it. `OPEN_PALM` additionally requires
+the **forearm to be roughly vertical**, which is what separates "I want your
+attention" from those. It is the default engage gesture.
+
+The honest limit: COCO-17 has no finger keypoints, so this is a *pose*, not a hand
+shape — a raised fist looks identical to a raised palm. Telling those apart needs
+a hand-landmark model on a wrist crop, which is a per-frame cost the Pi has not
+got. In practice the vertical-forearm test is what does the useful work.
+
+## Three ways to lose someone, three timings
+
+"The target is gone" has causes that look identical to the code and want opposite
+handling. One timeout cannot serve all three:
 
 | Cause | Evidence | Grace | Why |
 |---|---|---|---|
 | Walked out of shot | last box touched a frame edge | 0.6 s | A long grace here means the head stares at a doorway |
-| Detector blinked, or someone walked in front | last box in open frame | 2.0 s | A short grace here drops the lock every time the detector misses a frame — which at 4 fps is often |
+| Detector blinked, or someone crossed in front | last box in open frame | 2.0 s | A short grace here drops the lock every time the detector misses a frame — which at 4 fps is often |
+| **Turned their back** | shoulder parity + no face keypoints | 1.5 s | Nothing above catches this: the person is perfectly visible and perfectly tracked, so the lock would hold until they happened to walk out of shot |
+
+Facing comes from keypoints alone — no extra model. COCO labels sides from the
+*person's* frame, so someone facing the camera has their left shoulder on the
+image's **right**; turn around and that inverts. Face-keypoint visibility is the
+second signal, because at shallow angles the shoulder parity is within noise.
+PROFILE (edge-on) deliberately does not start the release clock: glancing down a
+corridor is still being in the conversation.
 
 Re-acquisition is by track id, so a grace period can never usefully outlive the
 tracker's own memory. `EngagementController.validate_against_tracker` checks that
 relationship and warns rather than failing silently.
 
+## "What is this?"
+
+Object identification is **request-driven**, not continuous. It is a second model,
+so running it every frame would roughly double the cost of a pipeline that has
+~4 fps to spend — and nobody needs the desk identified sixty times a minute. The
+model is loaded lazily on the first question.
+
+Ranking picks the thing being *presented* rather than the largest thing in shot:
+
+    prominence = centrality² × √(area fraction)
+
+Centrality is squared because it is the stronger signal — people hold things up in
+the middle of the frame, and the failure to avoid is confidently naming a chair at
+the edge. People are excluded; the questioner is not the answer.
+
 ## Layout
 
 ```
-types.py       BBox, Keypoints, Track, GestureEvent, AttentionTarget
-detector.py    Detector ABC + UltralyticsDetector + MockDetector
-tracker.py     greedy IoU/centroid tracking, time-based ageing
-gestures.py    keypoint -> gesture, scale-invariant
-engagement.py  the lock/unlock state machine
-gaze.py        image error -> normalised pan/tilt rate
-pipeline.py    glue, plus the latest-wins worker thread
-nodes/         thin ROS wrapper (Phase 1)
+types.py         BBox, Keypoints (incl. facing), Track, GestureEvent, ObjectGuess
+detector.py      Detector ABC + Ultralytics pose/object backends + MockDetector
+tracker.py       greedy IoU/centroid tracking, time-based ageing
+gestures.py      keypoints -> gesture, scale-invariant
+engagement.py    the lock/unlock state machine
+gaze.py          image error -> normalised pan/tilt rate
+pipeline.py      glue, latest-wins worker thread, object ranking
+status_store.py  var/perception/status.json -- how other processes see the camera
+nodes/           thin ROS wrapper (Phase 1)
 ```
 
 Everything except `detector.py` and `nodes/` is **pure Python** — no ROS, no
 OpenCV, no numpy — so a scene is a few lines of test code and an explicit clock.
+
+## Sharing what the camera sees
+
+`status_store.py` publishes vision state to `var/perception/status.json`, the same
+atomically-replaced-JSON pattern `model_conn` and `intelligence` already use for
+their own state.
+
+The point is process independence: `neo --webapp up`, `neo --model ... up` and
+`neo --prompt` are separate processes started in any order, and any may be absent.
+A file that is missing or stale is a state every reader already handles; a socket
+that is not listening yet is not.
+
+What it buys — the camera belongs to the panel's process, but:
+
+```bash
+neo --vision:status            # what the robot can see right now
+neo --prompt "what is this"    # answerable, because chat reads the same file
+```
+
+`intelligence.chat` appends one line of camera context to the *system* prompt
+(never the user's message), and only when the file is fresh.
 
 ## Design notes
 

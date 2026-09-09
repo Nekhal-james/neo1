@@ -11,16 +11,24 @@ which looks far worse than a lower frame rate.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field
 
-from .detector import Detector, MockDetector, UltralyticsConfig, make_detector
+from .detector import (
+    Detector,
+    MockDetector,
+    ObjectDetector,
+    ObjectDetectorConfig,
+    UltralyticsConfig,
+    make_detector,
+)
 from .engagement import EngagementConfig, EngagementController
 from .gaze import GazeCommand, GazeConfig, GazeMapper
 from .gestures import GestureConfig, GestureRecognizer
 from .tracker import MultiTracker, TrackerConfig
-from .types import PerceptionResult
+from .types import Detection, FacingState, ObjectGuess, PerceptionResult
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +37,7 @@ log = logging.getLogger(__name__)
 class PipelineConfig:
     detector_backend: str = "auto"
     detector: UltralyticsConfig = field(default_factory=UltralyticsConfig)
+    objects: ObjectDetectorConfig = field(default_factory=ObjectDetectorConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     gestures: GestureConfig = field(default_factory=GestureConfig)
     engagement: EngagementConfig = field(default_factory=EngagementConfig)
@@ -43,7 +52,12 @@ class PerceptionPipeline:
     """Synchronous pipeline. One call, one frame, deterministic -- so the whole
     behaviour can be driven from tests with no camera and no clock."""
 
-    def __init__(self, config: PipelineConfig | None = None, detector: Detector | None = None) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        detector: Detector | None = None,
+        object_detector: Detector | None = None,
+    ) -> None:
         self.cfg = config or PipelineConfig()
         self.detector = detector or make_detector(self.cfg.detector_backend, self.cfg.detector)
         self.tracker = MultiTracker(self.cfg.tracker)
@@ -57,6 +71,14 @@ class PerceptionPipeline:
         self.last_result = PerceptionResult(stamp=0.0, width=0, height=0)
         self.last_command = GazeCommand()
 
+        # Object identification is request-driven: no model is loaded, and no
+        # cost paid, until somebody actually asks "what is this?".
+        self._object_detector: Detector | None = object_detector
+        self._identify_requested = False
+        self.last_identification: list[ObjectGuess] = []
+        self.last_identify_error: str = ""
+        self.identify_seq = 0
+
     def process(self, frame, stamp: float | None = None) -> PerceptionResult:
         stamp = time.monotonic() if stamp is None else stamp
         height, width = _frame_size(frame)
@@ -66,21 +88,71 @@ class PerceptionPipeline:
 
         tracks = self.tracker.update(persons, stamp)
         visible = self.tracker.visible_tracks(stamp)
+        for track in visible:
+            track.facing = (
+                track.keypoints.facing()
+                if track.keypoints is not None
+                else FacingState.UNKNOWN
+            )
+
         gesture_map, gesture_events = self.gestures.update(visible, stamp)
         decision = self.engagement.update(visible, gesture_map, stamp, width, height)
         attention = self.gaze.to_attention(decision, width, height)
         self.last_command = self.gaze.to_command(attention)
+
+        if self._identify_requested:
+            self._identify_requested = False
+            self._run_identify(frame, width, height)
 
         self.last_result = PerceptionResult(
             stamp=stamp,
             width=width,
             height=height,
             tracks=list(tracks),
+            objects=list(self.last_identification),
             gestures=gesture_events,
             attention=attention,
             inference_ms=inference_ms,
         )
         return self.last_result
+
+    # -- object identification --------------------------------------------
+
+    def request_identify(self) -> None:
+        """Ask for the next frame to be run through the object model.
+
+        Deferred to the worker rather than run here so a question never blocks
+        the caller, and so identification uses a live frame rather than whatever
+        the pipeline last happened to keep.
+        """
+        self._identify_requested = True
+
+    @property
+    def identify_pending(self) -> bool:
+        return self._identify_requested
+
+    def _run_identify(self, frame, width: int, height: int) -> None:
+        try:
+            if self._object_detector is None:
+                self._object_detector = self._make_object_detector()
+            detections = self._object_detector.infer(frame)
+        except Exception as exc:
+            log.exception("object identification failed")
+            self.last_identify_error = str(exc)
+            self.last_identification = []
+            self.identify_seq += 1
+            return
+
+        self.last_identify_error = ""
+        self.last_identification = rank_presented_objects(detections, width, height)
+        self.identify_seq += 1
+
+    def _make_object_detector(self) -> Detector:
+        """A mock person detector implies a test or a machine with no models, so
+        identification stays mocked too rather than trying to download weights."""
+        if isinstance(self.detector, MockDetector):
+            return MockDetector()
+        return ObjectDetector(self.cfg.objects)
 
     def release(self, reason: str = "released") -> None:
         self.engagement.release(reason)
@@ -167,6 +239,57 @@ class AsyncPerception:
     @property
     def command(self) -> GazeCommand:
         return self.pipeline.last_command
+
+    def request_identify(self) -> None:
+        self.pipeline.request_identify()
+        # Nudge the worker: a question should not wait out an idle timeout.
+        self._wake.set()
+
+
+def rank_presented_objects(
+    detections: list[Detection], width: int, height: int
+) -> list[ObjectGuess]:
+    """Rank detections by how much each looks like the thing being *shown*.
+
+    "What is this?" is asked while holding something up, so the answer is
+    usually central and reasonably large -- while the desk, the chairs and the
+    notice board are none of those things but are permanently in shot.
+
+        prominence = centrality^2 * sqrt(area fraction)
+
+    Centrality is squared because it is the stronger signal: people hold things
+    up in the middle of the frame, and the whole failure mode to avoid is
+    confidently naming a chair at the edge. Area is square-rooted so a phone
+    held up still competes with a large background object.
+
+    People are excluded -- the questioner is not the answer.
+    """
+    if width <= 0 or height <= 0:
+        return []
+
+    cx, cy = width / 2.0, height / 2.0
+    half_diagonal = math.hypot(cx, cy)
+    frame_area = float(width * height)
+
+    guesses: list[ObjectGuess] = []
+    for det in detections:
+        if det.label == "person" or det.class_id == 0:
+            continue
+        distance = math.hypot(det.bbox.cx - cx, det.bbox.cy - cy)
+        centrality = max(0.0, 1.0 - distance / half_diagonal)
+        area_fraction = min(1.0, det.bbox.area / frame_area)
+        prominence = (centrality**2) * (area_fraction**0.5)
+        guesses.append(
+            ObjectGuess(
+                label=det.label,
+                confidence=det.score,
+                bbox=det.bbox,
+                prominence=prominence,
+            )
+        )
+
+    guesses.sort(key=lambda g: g.prominence, reverse=True)
+    return guesses
 
 
 def _timed(detector: Detector, frame) -> tuple[list, float]:

@@ -30,6 +30,9 @@ perception:
   # perception is a ROS node and the panel only observes it.
   enabled: true
   target_fps: 6.0   # a laptop can afford more than the Pi's ~4
+  # How often vision state is mirrored to var/perception/status.json, which
+  # is how `neo --vision:status` and `neo --prompt` see the camera.
+  status_interval_s: 1.0
 
 media:
   camera_max_fps: 8          # server-side cap as well as client-side

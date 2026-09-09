@@ -104,6 +104,11 @@ For unattended provisioning: `NEO_ADMIN_PASSWORD=... neo --webapp setup`.
 | POST | `/api/media/test-tone` | yes | prove the speaker path (mock only) |
 | GET | `/api/link/status` | yes | model_conn's link/ping stats — polled by the System tab |
 | GET | `/api/dialog/status` | yes | intelligence's last chat turn — polled by the Dialog tab |
+| GET | `/api/model/status` | yes | what `neo --model … up` is serving, plus the config-mismatch check |
+| POST | `/api/dialog/ask` | yes | `{text}` → ask the model, same path as `neo --prompt` |
+| POST | `/api/perception/identify` | yes | "what is this?" — one object-model pass on a live frame |
+| POST | `/api/perception/release` | yes | drop the engagement lock (operator override) |
+| POST | `/api/perception/reset` | yes | clear all tracks and ids — after moving the camera |
 
 WebSockets — all authenticated **before** the handshake is accepted, so an
 unauthenticated client never holds a media channel open:
@@ -124,11 +129,51 @@ python -m pytest -q
 
 Covers the auth gate (including lockout and pre-handshake WebSocket rejection),
 per-stream source switching, media channel lifecycle and leak-on-disconnect,
-server-side frame rate capping, and the deadman — including that soft limits hold
-under sustained input and that e-stop overrides live commands.
+server-side frame rate capping, the deadman — including that soft limits hold
+under sustained input and that e-stop overrides live commands — the head arbiter's
+priority order, the identify route's timeout and failure paths, the model-host
+status transitions, and the state-consistency regressions in §*Two ways state used
+to lie* below.
+
+## What the panel is a client of, not just an observer of
+
+Two things it now *drives* rather than merely displaying:
+
+**Perception.** The Vision tab runs the real
+[`neo_perception`](../neo_perception/README.md) pipeline against whatever camera
+the panel is using — palm-gesture engagement, facing-based release, and on-demand
+object identification, all with no Pi and no servos. The head it drives is
+simulated; the perception is not.
+
+**The model.** With `neo --model … up` running, the Dialog tab shows what is being
+served (name, endpoint, mTLS or plain) and lets you ask it questions.
+`POST /api/dialog/ask` goes through `intelligence.chat.ask` — deliberately the same
+function `neo --prompt` calls — so endpoint resolution, mTLS, the degraded reply
+and status-file writing cannot drift between the CLI and the browser.
+
+It also surfaces a mismatch that is otherwise silent: `chat.model_name` in
+`config/intelligence.yaml` has to match the name the host registered in Ollama.
+Nothing enforces that, and getting it wrong produces a degraded reply
+indistinguishable from the link being down — so the panel names the value to set.
+
+## Two ways state used to lie
+
+Both were invisible without a test, and both now have regressions in
+`tests/test_state_consistency.py`:
+
+- **A `@property` on a dataclass served through `asdict()`** is dropped silently —
+  no error, the key is simply absent from the JSON. `IdentifyView.best` and
+  `ModelView.summary` were both lost this way. They are plain fields now, and a
+  test fails if any served dataclass grows a property.
+- **A snapshot field nothing keeps current.** `RobotState.link` shipped in every
+  4 Hz snapshot reading "down, 0 failures" while `/api/link/status` beside it had
+  the real numbers. It is refreshed from the same reader at 1 Hz — *not* inside
+  `snapshot()`, because reading it is file I/O and that is exactly what the
+  broadcast loop must not do.
 
 ## Tabs, and the phase that fills each one
 
-Sources, System, and Head are live. The rest are stubs, filled in by the phase that
-produces their data — see plan §2.5. Building them this way keeps the panel useful
-throughout rather than deferring a monolithic UI phase to the end.
+Sources, System, Head, Vision, and Dialog are live. Audio, Data, Emotion, and Logs
+are stubs labelled with the phase that fills them — see plan §2.5. Building them
+this way keeps the panel useful throughout rather than deferring a monolithic UI
+phase to the end.

@@ -314,3 +314,19 @@ video, canvas.preview {
 
 .stage-empty b { color: var(--accent); }
 .stage.live .stage-empty { display: none; }
+
+.answer {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 13px;
+}
+
+.answer.good { border-color: #2c5f42; color: var(--good); }
+.answer.bad { border-color: #6b2f2f; color: var(--bad); }
+.answer .meta { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
+
+.ask-row { display: flex; gap: 8px; }
+.ask-row input { flex: 1; }

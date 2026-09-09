@@ -7,6 +7,7 @@ One CLI, `neo`, used on both ends of the Qwen 2.5 3B connection described in
 |---|---|---|
 | Host | the laptop serving the model | `neo --model path/to/model.gguf up` |
 | Receiver | the Pi | `neo --connection:status`, `neo --connection:ping` |
+| Either | reads what the camera sees | `neo --vision:status` |
 
 ## Quick start
 
@@ -56,8 +57,21 @@ neo --prompt "where is CS-204"
 ```
 
 Exactly one mode may be selected per invocation — `up`, `--connection:status`,
-`--connection:ping`, or `--prompt` — combining two of them is a usage error,
-not silently-picked precedence.
+`--connection:ping`, `--vision:status`, or `--prompt` — combining two of them is
+a usage error, not silently-picked precedence.
+
+To see what the robot is currently looking at:
+
+```bash
+neo --vision:status
+```
+
+This reads [`neo_perception`](../neo_perception/README.md)'s status file rather
+than opening a camera of its own — the camera belongs to whichever process is
+running perception (today `neo --webapp up`). It mirrors `--connection:status`,
+which reads this package's own. Three distinct outcomes, deliberately not
+collapsed: `UP` (live), `DOWN` (panel running, no detector), and `STALE` (nothing
+is running).
 
 Set up mTLS once (see below), then flip it on:
 
@@ -127,12 +141,31 @@ are unit-tested with a fake transport and no socket, the same discipline
 
 ## Getting stats into the admin panel
 
-`status_store.py` writes an atomic (tempfile + `os.replace`) JSON file at
-`var/model_conn/status.json` after every `up`/`status`/`ping` run.
-`neo_webapp/link_status.py` reads it and serves `GET /api/link/status`
-(authenticated) — so the panel shows real connection stats with **no ROS
-installed at all**, matching how both `neo_webapp` and `neo_perception`
-already run without a Pi.
+`status_store.py` writes two atomic (tempfile + `os.replace`) JSON files, and the
+split matters — they answer different questions and only one of them can be
+answered from each end:
+
+| File | Written by | Answers | Read by |
+|---|---|---|---|
+| `var/model_conn/status.json` | the **receiver** (`--connection:status`/`ping`) | can I reach the host, over which path, at what latency | `GET /api/link/status` |
+| `var/model_conn/host.json` | the **host** (`--model … up`) | is a model up *right now*, which one, and where | `GET /api/model/status` |
+
+The host file is the one no amount of probing from the receiver side can produce.
+Its most useful field is the **model name Ollama actually registered**, because
+asking for the wrong name fails as a 404 that looks exactly like the link being
+down — so the panel compares it against `chat.model_name` and says so out loud.
+
+Two properties it deliberately has:
+
+- **It heartbeats** (every 5 s while `up` runs) rather than being written once.
+  A one-shot file keeps claiming a model is up long after the process was killed,
+  and killed is how a foreground `up` normally ends. Readers treat anything older
+  than 20 s as "not running".
+- **A clean Ctrl-C writes `serving: false`**, so a deliberate shutdown shows in
+  the panel immediately instead of after the staleness timeout.
+
+Both are read with **no ROS installed at all**, matching how `neo_webapp` and
+`neo_perception` already run without a Pi.
 
 Once `neo_msgs` lands (Phase 1), `nodes/link_node.py` becomes the ROS-native
 path: a thin wrapper (same shape as `neo_perception`'s node) that drives the

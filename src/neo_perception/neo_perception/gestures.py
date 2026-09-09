@@ -15,6 +15,7 @@ gesture precisely because it survives the Pi's frame rate.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .types import GestureEvent, GestureKind, Keypoints, Track
@@ -31,6 +32,21 @@ class GestureConfig:
     Scale-invariant by construction: the comparison is against the person's own
     shoulder, so it does not change with their distance from the camera.
     """
+
+    palm_max_tilt_deg: float = 40.0
+    """How far the forearm may lean from vertical and still read as a presented
+    palm.
+
+    This is the whole difference between OPEN_PALM and RAISED_HAND. Someone
+    asking for attention holds the forearm up; someone scratching their head or
+    reaching for a shelf does not. 40 degrees is loose enough not to demand a
+    ruler-straight arm and tight enough to reject a sideways reach.
+    """
+
+    palm_min_forearm: float = 0.12
+    """Minimum wrist-to-elbow distance in torso units before the forearm angle
+    means anything. Foreshortened straight at the camera, the two keypoints
+    collapse together and the angle is pure noise."""
 
     wave_window_s: float = 2.0
     wave_min_direction_changes: int = 2
@@ -94,7 +110,41 @@ class GestureRecognizer:
             return GestureKind.NONE, 0.0
         if self._is_waving(track, stamp):
             return GestureKind.WAVE, confidence
+        if self._palm_presented(track.keypoints):
+            return GestureKind.OPEN_PALM, confidence
         return GestureKind.RAISED_HAND, confidence
+
+    def _palm_presented(self, kps: Keypoints | None) -> bool:
+        """A raised hand with a roughly vertical forearm.
+
+        Checked per arm rather than globally: with one arm up and the other
+        resting, a global test would mix keypoints from both and pass on a pose
+        neither arm is actually making.
+        """
+        if kps is None:
+            return False
+        scale = kps.torso_scale(self.cfg.keypoint_min_score)
+        if scale is None:
+            return False
+
+        for side in ("left", "right"):
+            wrist = kps.get(f"{side}_wrist", self.cfg.keypoint_min_score)
+            elbow = kps.get(f"{side}_elbow", self.cfg.keypoint_min_score)
+            shoulder = kps.get(f"{side}_shoulder", self.cfg.keypoint_min_score)
+            if wrist is None or elbow is None or shoulder is None:
+                continue
+            if (shoulder.y - wrist.y) / scale < self.cfg.raise_margin:
+                continue  # this arm is not the raised one
+            if wrist.y >= elbow.y:
+                continue  # forearm points down: not a presented hand
+
+            rise = elbow.y - wrist.y
+            run = abs(wrist.x - elbow.x)
+            if math.hypot(run, rise) / scale < self.cfg.palm_min_forearm:
+                continue  # too foreshortened for the angle to mean anything
+            if math.degrees(math.atan2(run, rise)) <= self.cfg.palm_max_tilt_deg:
+                return True
+        return False
 
     def _hand_raised(self, kps: Keypoints | None) -> tuple[bool, float]:
         if kps is None:

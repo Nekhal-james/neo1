@@ -147,6 +147,72 @@ class Keypoints:
             sum(p.y for p in vis) / len(vis),
         )
 
+    def has_face(self, min_score: float = 0.3) -> bool:
+        """Whether the front of the head is visible.
+
+        The nose or a pair of eyes. Ears deliberately do not count: they stay
+        visible from behind, which is exactly the case this must not confuse
+        with facing the camera.
+        """
+        if self.get("nose", min_score) is not None:
+            return True
+        return (
+            self.get("left_eye", min_score) is not None
+            and self.get("right_eye", min_score) is not None
+        )
+
+    def facing(
+        self,
+        min_score: float = 0.3,
+        profile_ratio: float = 0.25,
+    ) -> FacingState:
+        """Which way the person is turned, from keypoints alone.
+
+        Two independent signals, because either one alone is fooled:
+
+        * **Shoulder parity.** COCO labels shoulders from the *person's* frame,
+          so someone facing the camera has their left shoulder on the image's
+          right (`left.x > right.x`). Turn around and that inverts. This is the
+          strong signal, and it keeps working in poor light where the face does
+          not resolve.
+        * **Face visibility.** Nose or both eyes. Necessary because at very
+          shallow angles the shoulder parity is within noise.
+
+        Parity is only trusted once the shoulders are far enough apart to mean
+        anything: edge-on, their x separation collapses and the sign is noise,
+        which is what `profile_ratio` gates.
+        """
+        ls = self.get("left_shoulder", min_score)
+        rs = self.get("right_shoulder", min_score)
+        if ls is None or rs is None:
+            return FacingState.UNKNOWN
+
+        scale = self.torso_scale(min_score)
+        if scale is None or scale <= 0:
+            return FacingState.UNKNOWN
+
+        parity = ls.x - rs.x
+        separation = abs(parity) / scale
+        face = self.has_face(min_score)
+
+        if separation < profile_ratio:
+            # Edge-on. Still engaged with the room, just not square to us.
+            return FacingState.PROFILE if face else FacingState.AWAY
+        if parity < 0:
+            return FacingState.AWAY
+        if not face:
+            return FacingState.AWAY
+        return FacingState.FACING
+
+
+class FacingState(str, Enum):
+    """Which way a tracked person is turned."""
+
+    FACING = "facing"      # square to the camera
+    PROFILE = "profile"    # edge-on; still present, just looking elsewhere
+    AWAY = "away"          # turned their back
+    UNKNOWN = "unknown"    # not enough keypoints to say
+
 
 @dataclass(frozen=True)
 class Detection:
@@ -160,6 +226,19 @@ class Detection:
 class GestureKind(str, Enum):
     NONE = "none"
     RAISED_HAND = "raised_hand"
+    """Hand above the shoulder, at any arm angle. Loose: it also fires on
+    stretching, scratching your head, or reaching for a shelf."""
+
+    OPEN_PALM = "open_palm"
+    """Hand held up with a roughly vertical forearm -- a palm presented to the
+    camera. The default engage gesture, because the verticality requirement is
+    what separates "I want your attention" from "I am scratching my head".
+
+    Caveat worth knowing: COCO-17 has no finger keypoints, so this is a pose,
+    not a hand shape. A raised fist looks identical. Telling those apart needs a
+    hand-landmark model on a wrist crop, which is a cost the Pi has not got.
+    """
+
     WAVE = "wave"
 
 
@@ -180,6 +259,18 @@ class EngagementState(str, Enum):
     SUSPENDED = "suspended"    # locked target not visible; grace timer running
 
 
+@dataclass(frozen=True)
+class ObjectGuess:
+    """One candidate answer to "what is this?"."""
+
+    label: str
+    confidence: float
+    bbox: BBox
+    prominence: float = 0.0
+    """How much this looks like the thing being *presented* rather than
+    something incidental in shot -- see `pipeline.pick_presented_object`."""
+
+
 @dataclass
 class Track:
     """One tracked person across frames."""
@@ -189,6 +280,7 @@ class Track:
     stamp: float
     score: float = 0.0
     keypoints: Keypoints | None = None
+    facing: FacingState = FacingState.UNKNOWN
     vx: float = 0.0
     vy: float = 0.0
     hits: int = 1
@@ -244,7 +336,7 @@ class PerceptionResult:
     width: int
     height: int
     tracks: list[Track] = field(default_factory=list)
-    objects: list[Detection] = field(default_factory=list)
+    objects: list[ObjectGuess] = field(default_factory=list)
     gestures: list[GestureEvent] = field(default_factory=list)
     attention: AttentionTarget = field(default_factory=AttentionTarget)
     inference_ms: float = 0.0

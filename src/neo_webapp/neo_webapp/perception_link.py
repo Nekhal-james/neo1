@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import logging
 
-from .bridge.types import PerceptionView, TrackView
+from .bridge.types import IdentifyView, ObjectGuessView, PerceptionView, TrackView
 
 log = logging.getLogger(__name__)
 
 try:
     from neo_perception.pipeline import AsyncPerception, PerceptionPipeline, PipelineConfig
-    from neo_perception.types import GestureKind
 
     PERCEPTION_AVAILABLE = True
 except ImportError as exc:  # pragma: no cover - depends on environment
@@ -101,6 +100,13 @@ class PerceptionLink:
         if self.runner is not None:
             self.runner.pipeline.reset()
 
+    def request_identify(self) -> int:
+        """Queue an identification. Returns the seq to wait for."""
+        if self.runner is None:
+            return 0
+        self.runner.request_identify()
+        return self.runner.pipeline.identify_seq + 1
+
     def view(self, running: bool) -> PerceptionView:
         if self.runner is None:
             return PerceptionView(available=False)
@@ -125,9 +131,32 @@ class PerceptionLink:
                 confirmed=t.confirmed,
                 engaged=t.track_id == target_id,
                 gesture=gestures.get(t.track_id, "none"),
+                facing=t.facing.value,
             )
             for t in result.tracks
         ]
+
+        target_facing = next(
+            (t.facing.value for t in result.tracks if t.track_id == target_id),
+            "unknown",
+        )
+        identify = IdentifyView(
+            pending=pipeline.identify_pending,
+            seq=pipeline.identify_seq,
+            error=pipeline.last_identify_error,
+            guesses=[
+                ObjectGuessView(
+                    label=g.label,
+                    confidence=g.confidence,
+                    prominence=g.prominence,
+                    x1=g.bbox.x1 / width,
+                    y1=g.bbox.y1 / height,
+                    x2=g.bbox.x2 / width,
+                    y2=g.bbox.y2 / height,
+                )
+                for g in result.objects
+            ],
+        )
 
         return PerceptionView(
             available=True,
@@ -142,6 +171,9 @@ class PerceptionLink:
             dropped_frames=result.dropped_frames,
             last_gesture=self._last_gesture,
             release_reason=pipeline.engagement.last_release_reason,
+            target_facing=target_facing,
+            engage_gesture=pipeline.engagement.cfg.engage_gesture.value,
+            identify=identify,
             tracks=tracks,
             aim_x=result.attention.x,
             aim_y=result.attention.y,

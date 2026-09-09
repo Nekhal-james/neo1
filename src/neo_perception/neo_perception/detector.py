@@ -144,6 +144,43 @@ class UltralyticsDetector(Detector):
 
 
 @dataclass
+class ObjectDetectorConfig:
+    """The on-demand object model, used only to answer "what is this?".
+
+    A plain detect model, not pose: fingers and elbows are irrelevant here, and
+    the COCO classes are what name the object. Loaded lazily on the first
+    question, so a robot nobody has asked never pays for it.
+    """
+
+    model: str = "yolov8n.pt"
+    imgsz: int = 416
+    """Larger than the pose pass's 320. This runs once per question rather than
+    every frame, so the accuracy is worth more than the milliseconds."""
+
+    conf: float = 0.30
+    max_det: int = 12
+    device: str = "cpu"
+
+
+class ObjectDetector(UltralyticsDetector):
+    """Object detection for the identify path."""
+
+    name = "objects"
+
+    def __init__(self, config: ObjectDetectorConfig | None = None) -> None:
+        cfg = config or ObjectDetectorConfig()
+        super().__init__(
+            UltralyticsConfig(
+                model=cfg.model,
+                imgsz=cfg.imgsz,
+                conf=cfg.conf,
+                max_det=cfg.max_det,
+                device=cfg.device,
+            )
+        )
+
+
+@dataclass
 class ScriptedFrame:
     """One frame of a synthetic scene."""
 

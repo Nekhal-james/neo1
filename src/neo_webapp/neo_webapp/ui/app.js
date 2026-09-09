@@ -132,6 +132,86 @@ async function pollDialogStatus() {
   } catch { /* transient fetch failure; next poll retries */ }
 }
 
+async function pollModelStatus() {
+  const statusEl = $('v-mdl-status');
+  if (!statusEl) return;
+  try {
+    const res = await fetch('/api/model/status');
+    if (res.status === 401) { window.location = '/login'; return; }
+    if (!res.ok) return;
+    const m = await res.json();
+
+    statusEl.textContent = m.summary;
+    statusEl.style.color = m.serving ? 'var(--good)' : 'var(--muted)';
+    $('v-mdl-name').textContent = m.model_name || '—';
+    $('v-mdl-endpoint').textContent = m.endpoint || '—';
+    $('v-mdl-tls').textContent = m.reachable ? (m.tls_enabled ? 'mTLS' : 'plain HTTP') : '—';
+    $('v-mdl-configured').textContent = m.configured_model || 'not set';
+
+    // A model-name mismatch produces a degraded reply with no visible cause,
+    // so it gets said out loud rather than left to be discovered.
+    const warn = $('mdl-warning');
+    warn.hidden = m.warnings.length === 0;
+    warn.textContent = m.warnings.join(' ');
+    $('v-mdl-configured').style.color = m.mismatch ? 'var(--bad)' : '';
+  } catch { /* transient fetch failure; next poll retries */ }
+}
+
+// ------------------------------------------------------------------- ask
+
+const askInput = $('ask-input');
+const askBtn = $('btn-ask');
+
+async function askNeo() {
+  const text = askInput.value.trim();
+  if (!text) return;
+  const out = $('ask-answer');
+
+  askBtn.disabled = true;
+  out.hidden = false;
+  out.className = 'answer';
+  out.textContent = 'Thinking…';
+
+  try {
+    const res = await fetch('/api/dialog/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (res.status === 401) { window.location = '/login'; return; }
+    const body = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      out.className = 'answer bad';
+      out.textContent = body.detail || `request failed (${res.status})`;
+    } else {
+      // Degraded is a normal outcome, not an error -- the host is usually a
+      // daily-driver laptop. Amber, not red.
+      out.className = 'answer ' + (body.source === 'degraded' ? '' : 'good');
+      out.textContent = body.reply;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = body.source === 'degraded'
+        ? 'degraded — no model host reachable'
+        : `${body.source} · ${body.host} · ${body.latency_ms.toFixed(0)} ms`;
+      out.appendChild(meta);
+      askInput.value = '';
+      pollDialogStatus();
+    }
+  } catch {
+    out.className = 'answer bad';
+    out.textContent = 'could not reach the panel';
+  } finally {
+    askBtn.disabled = false;
+    askInput.focus();
+  }
+}
+
+if (askBtn) {
+  askBtn.addEventListener('click', askNeo);
+  askInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') askNeo(); });
+}
+
 // ------------------------------------------------------------- perception
 
 const STATE_LABEL = {
@@ -157,6 +237,12 @@ function renderPerception(p) {
   $('v-eng-gesture').textContent = p.last_gesture;
   $('v-eng-release').textContent = p.release_reason || '—';
   $('v-eng-aim').textContent = `${p.aim_x.toFixed(2)}, ${p.aim_y.toFixed(2)}`;
+  $('v-eng-wants').textContent = (p.engage_gesture || '').replace('_', ' ') || '—';
+
+  const facingEl = $('v-eng-facing');
+  facingEl.textContent = p.target_facing === 'unknown' && !p.engaged ? '—' : p.target_facing;
+  // Amber while facing away: the release countdown is running.
+  facingEl.style.color = p.target_facing === 'away' ? 'var(--warn)' : '';
 
   $('v-det-backend').textContent = p.detector;
   $('v-det-people').textContent = p.person_count;
@@ -196,7 +282,9 @@ function drawOverlay(p) {
     }
     ctx.strokeRect(x, y, bw, bh);
 
-    const tag = `#${t.track_id}${t.gesture !== 'none' ? ' ✋' : ''}${t.engaged ? ' LOCKED' : ''}`;
+    const palm = t.gesture === 'open_palm' ? ' PALM' : t.gesture !== 'none' ? ' hand' : '';
+    const away = t.facing === 'away' ? ' back turned' : '';
+    const tag = `#${t.track_id}${palm}${away}${t.engaged ? ' LOCKED' : ''}`;
     ctx.setLineDash([]);
     ctx.font = '600 12px ui-monospace, monospace';
     const tw = ctx.measureText(tag).width + 10;
@@ -222,6 +310,42 @@ function drawOverlay(p) {
 
 $('btn-release').addEventListener('click', () => post('/api/perception/release'));
 $('btn-reset-tracks').addEventListener('click', () => post('/api/perception/reset'));
+
+// ---------------------------------------------------------- identify object
+
+$('btn-identify').addEventListener('click', async () => {
+  const btn = $('btn-identify');
+  const out = $('identify-answer');
+  btn.disabled = true;
+  out.hidden = false;
+  out.className = 'answer';
+  // The first question also pays for loading the object model off disk, so
+  // saying nothing here reads as a hang.
+  out.textContent = 'Looking…';
+
+  try {
+    const res = await fetch('/api/perception/identify', { method: 'POST' });
+    if (res.status === 401) { window.location = '/login'; return; }
+    const body = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      out.className = 'answer bad';
+      out.textContent = body.detail || `identification failed (${res.status})`;
+    } else if (!body.best) {
+      out.textContent = "I don't recognise anything being held up.";
+    } else {
+      const others = body.guesses.slice(1, 3).map((g) => g.label);
+      out.className = 'answer good';
+      out.textContent = `That looks like a ${body.best}.`
+        + (others.length ? `  (also saw: ${others.join(', ')})` : '');
+    }
+  } catch {
+    out.className = 'answer bad';
+    out.textContent = 'could not reach the panel';
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 function fmtDuration(sec) {
   const s = Math.floor(sec % 60), m = Math.floor((sec / 60) % 60), h = Math.floor(sec / 3600);
@@ -476,5 +600,7 @@ loadConfig().then(() => { $('deadman-ms').textContent = config.joyDeadmanMs; });
 connectState();
 pollLinkStatus();
 pollDialogStatus();
+pollModelStatus();
 setInterval(pollLinkStatus, POLL_MS);
 setInterval(pollDialogStatus, POLL_MS);
+setInterval(pollModelStatus, POLL_MS);

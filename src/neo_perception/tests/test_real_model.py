@@ -107,6 +107,38 @@ def test_raising_a_real_persons_wrist_engages(real_detections):
     assert result.attention.state is EngagementState.ENGAGED
 
 
+class TestRealObjectIdentification:
+    """The identify path against the real object model, not the pose one."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def object_detections(cls):
+        from neo_perception.detector import ObjectDetector, ObjectDetectorConfig
+
+        try:
+            return ObjectDetector(ObjectDetectorConfig(imgsz=416)).infer(SAMPLE)
+        except Exception as exc:
+            pytest.skip(f"object model unavailable: {exc}")
+
+    def test_the_object_model_labels_real_things(self, object_detections):
+        assert object_detections
+        assert any(d.label == "bus" for d in object_detections)
+
+    def test_people_are_stripped_from_the_answer(self, object_detections):
+        from neo_perception.pipeline import rank_presented_objects
+
+        assert any(d.label == "person" for d in object_detections), "sample has people"
+        ranked = rank_presented_objects(object_detections, 810, 1080)
+        assert ranked, "something should survive ranking"
+        assert all(g.label != "person" for g in ranked)
+
+    def test_the_dominant_object_ranks_first(self, object_detections):
+        from neo_perception.pipeline import rank_presented_objects
+
+        ranked = rank_presented_objects(object_detections, 810, 1080)
+        assert ranked[0].label == "bus"
+
+
 def _raise_wrist(detection: Detection) -> Detection:
     """Lift the right wrist above the shoulder, leaving everything else real."""
     kps = detection.keypoints

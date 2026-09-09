@@ -76,6 +76,10 @@ class PerceptionConfig:
     enabled: bool = True
     target_fps: float = 6.0
 
+    status_interval_s: float = 1.0
+    """How often to mirror vision state into var/perception/status.json for
+    the other `neo` processes to read."""
+
 
 @dataclass
 class Config:
@@ -132,6 +136,9 @@ class Config:
             perception=PerceptionConfig(
                 enabled=bool(perception_raw.get("enabled", True)),
                 target_fps=float(perception_raw.get("target_fps", 6.0)),
+                status_interval_s=float(
+                    perception_raw.get("status_interval_s", 1.0)
+                ),
             ),
             bridge_backend=(raw.get("bridge", {}) or {}).get("backend", "auto"),
         )

@@ -73,13 +73,37 @@ handling, never a bare stack trace.
 the vectorless structure (`rooms.yaml`/`graph.yaml`/`coverage.yaml`) it will
 hold once Phase 7 is built. No retrieval logic exists here yet.
 
+## Camera context: how "what is this?" becomes answerable
+
+`chat.ask()` appends one line about what the camera currently sees to the
+**system** prompt — never to the user's message, because it is situational
+context, not something the person said:
+
+> What your camera sees right now: 1 person in view (engaged); most recently
+> identified object: cell phone.
+
+It comes from [`neo_perception`](../neo_perception/README.md)'s status file, not
+from a camera. That is the whole point: the camera belongs to whichever process
+is running perception (today the admin panel), while this one may be a
+short-lived `neo --prompt`. A missing or stale file yields no context, which is
+the same as having no camera — so the feature can never cost you an answer.
+
+Without it, "what am I holding" is unanswerable no matter how good either half
+of the system is.
+
 ## Surfacing state in the admin panel
 
-Every `chat.ask()` call (so every `neo --prompt`) writes
-`var/intelligence/status.json` — atomic tempfile-then-rename, same pattern as
-`model_conn/status_store.py`. `neo_webapp` reads it with zero ROS installed
-via `GET /api/dialog/status` (see `src/neo_webapp/neo_webapp/dialog_status.py`),
-exactly how `/api/link/status` already surfaces `model_conn`'s state.
+Every `chat.ask()` call writes `var/intelligence/status.json` — atomic
+tempfile-then-rename, same pattern as `model_conn/status_store.py`. `neo_webapp`
+reads it with zero ROS installed via `GET /api/dialog/status` (see
+`src/neo_webapp/neo_webapp/dialog_status.py`), exactly how `/api/link/status`
+already surfaces `model_conn`'s state.
+
+That is now written from **two** surfaces, not one: `neo --prompt` and the
+panel's Dialog tab, which posts to `/api/dialog/ask`. Both call this same
+`ask()`, so endpoint resolution, mTLS, the degraded reply and the status write
+cannot drift between them — and the "last chat turn" card reflects whichever
+asked last.
 
 ## Running it
 

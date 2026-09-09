@@ -40,4 +40,11 @@ tls:
   client_cert: certs/model_conn/client-cert.pem
   client_key: certs/model_conn/client-key.pem
 
-status_file: var/model_conn/status.json   # relative to repo root; gitignored
+# Both relative to the repo root, both gitignored.
+# status_file      written by the *receiver* (`--connection:status`/`ping`):
+#                  can I reach the host.
+# host_status_file written by the *host* (`--model ... up`): which model is
+#                  actually being served, and where. The admin panel reads it,
+#                  and it heartbeats -- so a stale file means "not running".
+status_file: var/model_conn/status.json
+host_status_file: var/model_conn/host.json

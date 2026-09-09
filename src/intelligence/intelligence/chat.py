@@ -89,6 +89,25 @@ class ChatResult:
     latency_ms: float = 0.0
 
 
+def vision_context() -> str:
+    """One line about what the camera currently sees, or "" if nothing is.
+
+    Read from neo_perception's status file rather than from the camera: the
+    camera belongs to whichever process is running perception (today the admin
+    panel), and this one may be a short-lived `neo --prompt`. A stale or absent
+    file simply means no context, which is the same as having no camera.
+    """
+    try:
+        from neo_perception.status_store import read_status
+    except ImportError:
+        return ""
+    try:
+        return read_status().describe()
+    except Exception:  # noqa: BLE001 -- context is a nicety, never a failure
+        log.debug("vision context unavailable", exc_info=True)
+        return ""
+
+
 def ask(
     text: str,
     *,
@@ -96,14 +115,24 @@ def ask(
     mc_cfg: ModelConnConfig,
     transport: ChatTransport | None = None,
     probe_transport=None,
+    vision: str | None = None,
 ) -> ChatResult:
     """`probe_transport` overrides model_conn.link's default HTTP probe --
     exposed only so tests can fake endpoint reachability without touching a
-    socket; production code never passes it."""
+    socket; production code never passes it.
+
+    `vision` overrides the camera context line for the same reason.
+    """
     if not cfg.chat.model_name:
         log.warning("chat.model_name is not configured; the request will likely 404")
 
     system = load_system_prompt(cfg)
+    seen = vision_context() if vision is None else vision
+    if seen:
+        # Appended to the system prompt rather than the user's message so the
+        # model treats it as situational context, not as something the person
+        # said. Questions like "what am I holding" are unanswerable without it.
+        system = f"{system}\n\nWhat your camera sees right now: {seen}."
     host, port = _resolve_endpoint(mc_cfg, probe_transport)
 
     if host is not None:

@@ -7,19 +7,24 @@
        +---------------------------------------- SUSPENDED
                     grace expired / track gone
 
-Two grace periods, not one
---------------------------
-"The target vanished" has two very different causes, and treating them alike makes
-the robot feel broken either way:
+Three ways to lose someone, three different timings
+---------------------------------------------------
+"The target is gone" has causes that look identical to the code and demand
+opposite handling. Collapsing them into one timeout makes the robot feel broken
+whichever value you pick:
 
-* **Walked out of shot.** Last box was against a frame edge. They have left; hold
-  briefly, then release, so the next person can get the robot's attention. A long
-  grace here means the head stares at a doorway.
-* **Detector blinked, or someone walked in front of them.** Last box was in open
-  frame. They are almost certainly still there; a short grace here means the lock
-  drops every time the detector misses a frame, which at 3-5 fps is often.
+* **Walked out of shot** (last box against a frame edge, 0.6 s). They have left;
+  release soon so the next person can get the robot's attention. A long grace
+  here means the head stares at a doorway.
+* **Detector blinked, or someone crossed in front** (last box in open frame,
+  2.0 s). They are almost certainly still there. A short grace here drops the
+  lock every time the detector misses a frame, which at 3-5 fps is often.
+* **Turned their back** (still tracked, still in frame, 1.5 s). Nothing above
+  catches this: the person is perfectly visible and the lock would hold until
+  they happened to walk out of shot. Facing comes from keypoints -- see
+  `Keypoints.facing`.
 
-Re-acquisition is by track id, so the grace can never usefully outlive the
+Re-acquisition is by track id, so a grace can never usefully outlive the
 tracker's own memory -- see `validate_against_tracker`.
 """
 
@@ -31,6 +36,7 @@ from .tracker import TrackerConfig
 from .types import (
     EngagementDecision,
     EngagementState,
+    FacingState,
     GestureKind,
     Track,
 )
@@ -38,8 +44,13 @@ from .types import (
 
 @dataclass
 class EngagementConfig:
-    engage_gesture: GestureKind = GestureKind.RAISED_HAND
-    """RAISED_HAND by default: it survives the Pi's frame rate, WAVE does not."""
+    engage_gesture: GestureKind = GestureKind.OPEN_PALM
+    """A presented palm: hand up, forearm vertical.
+
+    OPEN_PALM rather than RAISED_HAND because the verticality requirement is
+    what rejects a stretch or a reach for a shelf. Both survive the Pi's frame
+    rate, being static poses; WAVE does not.
+    """
 
     confirm_s: float = 0.6
     """How long the gesture must be held before locking.
@@ -56,6 +67,20 @@ class EngagementConfig:
     """Release delay when the target vanished from open frame."""
 
     border_margin_px: float = 8.0
+
+    turned_away_grace_s: float = 1.5
+    """How long the target may face away before the lock releases.
+
+    A third way to lose someone, distinct from the two above: they are still in
+    frame and still tracked, they have simply turned their back and walked off
+    to their lecture. Without this the robot keeps solemnly tracking the back of
+    a head until they happen to exit the frame.
+
+    The delay matters as much as the rule. People turn away constantly
+    mid-conversation -- to point at a corridor, to talk to a friend, to look at
+    what the robot is pointing at. Releasing on the first away-facing frame
+    would make the lock feel like it keeps dropping for no reason.
+    """
 
     max_engage_s: float = 0.0
     """Hard cap on one engagement, 0 to disable.
@@ -79,6 +104,7 @@ class EngagementController:
         self._candidate_since: float = 0.0
         self._engaged_since: float = 0.0
         self._suspended_since: float = 0.0
+        self._away_since: float | None = None
         self._grace_s: float = 0.0
         self._last_target_bbox = None
         self.last_release_reason: str = ""
@@ -188,6 +214,7 @@ class EngagementController:
         track = visible.get(self.target_id)
         if track is not None:
             self._last_target_bbox = track.bbox
+            self._update_facing(track, stamp)
             return
 
         # Lost this frame: pick the grace period from *where* it was last seen.
@@ -197,6 +224,21 @@ class EngagementController:
         self._grace_s = self.cfg.exit_grace_s if left_frame else self.cfg.occlusion_grace_s
         self._suspended_since = stamp
         self.state = EngagementState.SUSPENDED
+
+    def _update_facing(self, track: Track, stamp: float) -> None:
+        """Release once the target has faced away long enough to mean it.
+
+        PROFILE deliberately does not count: someone glancing down a corridor,
+        or turning to look at what the robot is looking at, is still in the
+        conversation. Only a genuine AWAY starts the clock.
+        """
+        if track.facing is not FacingState.AWAY:
+            self._away_since = None
+            return
+        if self._away_since is None:
+            self._away_since = stamp
+        elif (stamp - self._away_since) >= self.cfg.turned_away_grace_s:
+            self._release("turned away")
 
     def _step_suspended(self, visible: dict[int, Track], stamp: float) -> None:
         if self.target_id in visible:
@@ -221,6 +263,7 @@ class EngagementController:
         self.target_id = None
         self._candidate_id = None
         self._last_target_bbox = None
+        self._away_since = None
         self.last_release_reason = reason
 
     def reset(self) -> None:

@@ -75,11 +75,18 @@ class Config:
     receiver: ReceiverConfig = field(default_factory=ReceiverConfig)
     tls: TlsConfig = field(default_factory=TlsConfig)
     status_file: str = "var/model_conn/status.json"
+    host_status_file: str = "var/model_conn/host.json"
     source_path: Path | None = None
 
     @property
     def status_path(self) -> Path:
         return _resolve(self.status_file)
+
+    @property
+    def host_status_path(self) -> Path:
+        """Where `neo --model ... up` publishes what it is serving, so the
+        admin panel can show it without being on the same machine's CLI."""
+        return _resolve(self.host_status_file)
 
     @property
     def ca_cert_path(self) -> Path:
@@ -145,6 +152,9 @@ class Config:
                 client_key=tls_raw.get("client_key", "certs/model_conn/client-key.pem"),
             ),
             status_file=raw.get("status_file", "var/model_conn/status.json"),
+            host_status_file=raw.get(
+                "host_status_file", "var/model_conn/host.json"
+            ),
         )
 
 
