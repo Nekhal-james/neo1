@@ -443,6 +443,40 @@ Do not add face recognition or identity. Do not chase fps with a bigger model.
 *Goal: "Neo" wakes the robot; speech becomes text **without the laptop**; text becomes speech.*
 *Estimate: 6–7 days (up from revision 1 — local ASR is now in scope).*
 
+### 5.0 Status: ASR and TTS landed; the gate has not
+
+Speech-to-text and text-to-speech are implemented and wired end to end through
+the admin panel's Audio tab. What is **not** built is step 1-3 and 6 below — the
+wake word, VAD endpointing, and the barge-in guard — which is to say the gate
+itself. Read §5.1 as still entirely outstanding.
+
+What exists:
+
+* **Vosk streaming on the Pi**, as `intelligence.asr.Session`: partial
+  hypotheses while you speak, and the recognizer calling its own endpoint rather
+  than a fixed silence timer in the caller, which would clip anyone who pauses
+  mid-sentence.
+* **Piper locally**, as `intelligence.tts.synthesize_pcm()`, returning raw PCM
+  resampled to whatever rate the consumer plays at. A voice at the wrong rate is
+  not an error, it just plays at the wrong pitch.
+* **Both models cached.** They were being reloaded per call, which costs
+  seconds — survivable for a one-shot CLI invocation, fatal for streaming.
+* **The panel's Audio tab**, driving the real engines: speak into the browser
+  and see the transcript; type and hear it back. `POST /api/audio/transcribe`
+  accepts an uploaded WAV, so the ASR path is testable with no microphone at
+  all, which is also how a recorded corridor clip gets replayed later.
+
+Two consequences worth being explicit about:
+
+* **Nothing gates recognition yet.** On the panel, the mic channel being open
+  *is* the listening window. That is a deliberate stand-in, not a violation of
+  the CLAUDE.md invariant: the operator opening the channel is an explicit act.
+  When `wake_word` lands it takes that role, and `asr_router` subscribes only
+  inside the window it opens.
+* **The off-board Whisper branch of step 4 is still absent.** Vosk is the only
+  engine, which is the right default — it is the one that works with the laptop
+  closed.
+
 ### 5.1 The gate
 
 `/audio/in` flows continuously to exactly one consumer: `wake_word`. ASR is **not** subscribed to the mic in `IDLE`. On a wake event, `dialog_manager` opens a listening window and `asr_router` begins consuming; when the window closes, it stops. This is the CLAUDE.md invariant and it is also what keeps the Pi's CPU free.

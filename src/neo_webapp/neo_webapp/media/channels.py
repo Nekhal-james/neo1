@@ -120,19 +120,45 @@ async def ws_camera(websocket: WebSocket) -> None:
 
 @router.websocket("/ws/mic")
 async def ws_mic(websocket: WebSocket) -> None:
-    """Browser microphone -> /audio/webapp/in, as 16 kHz mono s16le PCM."""
+    """Browser microphone -> /audio/webapp/in, as 16 kHz mono s16le PCM.
+
+    The same chunks also go to the recognizer, so the panel transcribes what it
+    hears rather than only metering it. That is deliberately not a separate
+    "start listening" call: the mic channel being open *is* the listening
+    window here. The wake word will own that gate on the real robot (CLAUDE.md);
+    until it exists, the operator opening the channel is the gate, which keeps
+    the panel honest about never recognizing audio nobody asked it to.
+
+    Recognition failures never close the channel. A missing Vosk model must not
+    take the microphone down with it -- the mic is also feeding the meter, the
+    bridge, and eventually the wake word.
+    """
     if await require_ws_session(websocket) is None:
         return
     await websocket.accept()
     bridge, media = _ctx(websocket)
+    speech = websocket.app.state.speech
     await media.open("mic")
     try:
         while True:
             chunk = await websocket.receive_bytes()
             await bridge.publish_mic_chunk(chunk)
+            # Guarded here as well as inside SpeechLink. The claim above -- that
+            # recognition never takes the microphone down -- has to hold for
+            # whatever is plugged in as the recognizer, not only for the one
+            # implementation that happens to catch its own errors.
+            try:
+                await speech.feed(chunk)
+            except Exception:  # noqa: BLE001
+                log.exception("speech-to-text failed on a mic chunk")
     except WebSocketDisconnect:
         pass
     finally:
+        # Flush before closing: without this the trailing audio -- often the
+        # last word -- is dropped whenever someone stops the mic instead of
+        # pausing long enough for the recognizer to endpoint on its own.
+        with contextlib.suppress(Exception):
+            await speech.flush()
         await media.close("mic")
 
 

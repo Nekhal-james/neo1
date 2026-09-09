@@ -18,6 +18,7 @@ from .config import Config
 from .link_status import read_link_status
 from .media import MediaManager, media_router
 from .perception_link import PerceptionLink
+from .speech import SpeechLink
 
 try:
     from neo_perception.status_store import write_status as write_vision_status
@@ -45,6 +46,20 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
         link, _ping = read_link_status()
         app.state.bridge.snapshot().link = link
 
+    def refresh_audio(app: FastAPI) -> None:
+        """Keep RobotState.audio current.
+
+        Availability stats the Vosk/Piper model paths, so it lives here on the
+        1 Hz task rather than in `snapshot()` -- same rule as the link status
+        above. The live parts (partial text, last transcript) are in memory and
+        are read straight out of SpeechLink at 4 Hz.
+        """
+        speech: SpeechLink = app.state.speech
+        speech.refresh_availability()
+        app.state.bridge.snapshot().audio = speech.view(
+            listening=app.state.media.active("mic")
+        )
+
     async def publish_vision_status(app: FastAPI) -> None:
         """Mirror what the camera sees into var/perception/status.json, and keep
         the file-backed parts of RobotState current.
@@ -58,6 +73,10 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
                 refresh_link(app)
             except Exception:
                 log.exception("link status refresh failed")
+            try:
+                refresh_audio(app)
+            except Exception:
+                log.exception("audio status refresh failed")
             if write_vision_status is None:
                 await asyncio.sleep(cfg.perception.status_interval_s)
                 continue
@@ -119,6 +138,10 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
         )
     app.state.bridge = bridge
     app.state.media = MediaManager(app.state.bridge)
+    app.state.speech = SpeechLink(
+        mic_rate=cfg.media.mic_sample_rate,
+        speaker_rate=cfg.media.speaker_sample_rate,
+    )
 
     app.include_router(api_router)
     app.include_router(media_router)

@@ -11,7 +11,9 @@ Two are ROS: `neo_msgs` (the frozen interface contracts) and `neo_bringup`
 (launch profiles). [README.md](README.md) tracks what each one currently does.
 
 Not built: motion (the servo driver), the wake word, the vectorless campus-data
-engine, and the emotion layer. The ROS *nodes* wrapping the Python cores are
+engine, and the emotion layer. Speech-to-text and text-to-speech *are* built and
+wired to the panel's Audio tab, but nothing gates them yet — the wake word is
+what will, and until then an open mic channel is the listening window. The ROS *nodes* wrapping the Python cores are
 also not built — `nodes/*.py` in each package documents its wiring and raises
 `NotImplementedError`. Everything below describes the design those must follow,
 including the parts not yet written.

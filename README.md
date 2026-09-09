@@ -21,7 +21,7 @@ Six packages under `src/` are implemented and tested; the rest of the plan
 | [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, and Dialog tabs live; Audio/Data/Emotion/Logs are stubs filled in by later phases |
 | [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification |
 | [`model_conn`](src/model-conn/README.md) | Phase 6 (partial) — the off-board LLM host/receiver link | CLI for serving the model (host) and checking the link (receiver); real mTLS via a private CA (`neo --tls init`) |
-| [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; local Vosk STT and Piper TTS wired up; RAG data folder and system prompt are placeholders |
+| [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; streaming Vosk STT and Piper TTS wired through to the admin panel's Audio tab; RAG data folder and system prompt are placeholders |
 | [`neo_msgs`](src/neo_msgs/README.md) | Phase 1 — the frozen message/service contracts | All 15 interfaces defined; a contract test guards them against drifting from the Python mirrors the panel runs on |
 | [`neo_bringup`](src/neo_bringup/README.md) | Phase 1 — launch profiles | `dev`, `hardware`, `hybrid`, `bench`; the node registry lists every node the robot will run and which phase makes it real |
 
@@ -51,9 +51,16 @@ either.
 - **Answer questions**, through the panel or `neo --prompt`, with the model when
   one is reachable and a degraded reply when not — and with one line of camera
   context attached, which is what makes "what am I holding" answerable at all.
+- **Hear you, and answer out loud.** Speak into the browser and Vosk transcribes
+  it live, partial hypothesis and all; type a sentence and Piper speaks it back
+  through the browser's speakers. Both run locally, so neither needs the laptop.
+  Downloading a Vosk model and a Piper voice is the only setup — until then the
+  Audio tab says exactly which path is missing rather than failing silently.
 
-Not yet: it cannot move a real servo, hear a wake word, or answer a campus
-question from real data. See *Not built yet* below.
+Not yet: it cannot move a real servo, wake to its own name, or answer a campus
+question from real data. Speech works, but it is not yet *gated* by the wake
+word — on the panel, opening the mic channel is what opens the listening
+window. See *Not built yet* below.
 
 ## Repo layout
 
@@ -135,8 +142,18 @@ neo --prompt "where is CS-204"
 
 This routes through `model_conn`'s link the same way `--connection:status`
 does; with no reachable host it prints a degraded-mode message instead of
-crashing. For local speech I/O (`pip install -e ".[dev,voice]"` to get Vosk
-and Piper), see [src/intelligence/README.md](src/intelligence/README.md).
+crashing. For local speech I/O, install the voice extra and download a model:
+
+```bash
+pip install -e ".[dev,voice]"
+# then set asr.vosk_model_path and tts.piper_model_path in
+# config/intelligence.local.yaml, and use the panel's Audio tab
+```
+
+Vosk models come from [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)
+(`vosk-model-small-en-in` for Indian English) and Piper voices from
+[the piper-voices repo](https://huggingface.co/rhasspy/piper-voices). Neither is
+committed — see [src/intelligence/README.md](src/intelligence/README.md).
 
 The admin panel is a client of that same path, not just an observer of it. With
 `neo --model … up` running, the panel's **Dialog** tab shows what is being

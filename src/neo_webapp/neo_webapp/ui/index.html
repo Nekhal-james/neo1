@@ -22,7 +22,7 @@
     <button data-tab="system">System</button>
     <button data-tab="head">Head</button>
     <button data-tab="vision">Vision</button>
-    <button data-tab="audio" disabled>Audio<span class="phase">P5</span></button>
+    <button data-tab="audio">Audio</button>
     <button data-tab="dialog">Dialog</button>
     <button data-tab="data" disabled>Data<span class="phase">P7</span></button>
     <button data-tab="emotion" disabled>Emotion<span class="phase">P9</span></button>
@@ -175,7 +175,71 @@
         </div>
       </div>
     </section>
-    <section class="tab" id="tab-audio"><div class="stub">Wake-word meter, VAD view, TTS test — <code>Phase 5</code></div></section>
+    <!-- Audio -->
+    <section class="tab" id="tab-audio">
+      <div class="grid">
+        <div class="card" style="grid-column: 1 / -1; max-width: 680px">
+          <h2>Say something</h2>
+          <div class="ask-row">
+            <input id="say-input" type="text" autocomplete="off"
+                   placeholder="Hello, I am Neo. How can I help?">
+            <button id="btn-say">Speak</button>
+          </div>
+          <div class="answer" id="say-answer" hidden></div>
+          <div class="hint">
+            Piper synthesizes locally and the audio is pushed down the speaker
+            channel. Connect the speaker on the <b>Sources</b> tab first, or it
+            plays to nobody.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Speech to text</h2>
+          <div class="row"><span class="k">Engine</span><span class="v" id="v-asr-engine">—</span></div>
+          <div class="row"><span class="k">Status</span><span class="v" id="v-asr-status">—</span></div>
+          <div class="row"><span class="k">Listening</span><span class="v" id="v-asr-listening">—</span></div>
+          <div class="row"><span class="k">Audio in</span><span class="v" id="v-asr-bytes">—</span></div>
+          <div class="row"><span class="k">Utterances</span><span class="v" id="v-asr-count">—</span></div>
+          <div class="answer bad" id="asr-warning" hidden></div>
+          <div class="hint">
+            Start the mic on the <b>Sources</b> tab. The mic channel being open
+            <i>is</i> the listening window — on the robot the wake word owns that
+            gate instead.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Text to speech</h2>
+          <div class="row"><span class="k">Engine</span><span class="v" id="v-tts-engine">—</span></div>
+          <div class="row"><span class="k">Status</span><span class="v" id="v-tts-status">—</span></div>
+          <div class="row"><span class="k">Speaker</span><span class="v" id="v-tts-speaker">—</span></div>
+          <div class="answer bad" id="tts-warning" hidden></div>
+          <div class="row" style="margin-top:8px">
+            <button id="btn-audio-reload">Reload models</button>
+          </div>
+          <div class="hint">
+            Re-reads <code>config/intelligence.yaml</code> and drops cached
+            models, so downloading a voice does not need a restart.
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1">
+          <h2>Heard</h2>
+          <div class="row"><span class="k">In progress</span><span class="v" id="v-asr-partial">—</span></div>
+          <div class="row"><span class="k">Last transcript</span><span class="v" id="v-asr-final">—</span></div>
+          <div class="row"><span class="k">Confidence</span><span class="v" id="v-asr-conf">—</span></div>
+          <div class="row" style="margin-top:8px">
+            <button id="btn-asr-reset">Clear</button>
+            <button id="btn-say-heard">Speak it back</button>
+          </div>
+          <div class="hint">
+            "In progress" is the recognizer's running hypothesis and changes as
+            you speak — it is not a transcript. "Speak it back" is the whole
+            round trip: your voice in, Piper's out.
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- Dialog -->
     <section class="tab" id="tab-dialog">

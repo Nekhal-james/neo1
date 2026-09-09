@@ -78,6 +78,62 @@ class DialogView:
 
 
 @dataclass
+class TranscriptView:
+    """Mirrors /dialog/transcript (neo_msgs/Transcript).
+
+    Field-for-field, and asserted so by neo_msgs/test/test_contract.py -- this
+    is what the ROS node will publish once Phase 5's asr_router exists, and the
+    panel already renders it today from the in-process recognizer.
+    """
+
+    text: str = ""
+    is_final: bool = False
+    confidence: float = 0.0
+    # "vosk" or "whisper". A string here, a uint8 constant on the wire; the
+    # panel shows it verbatim because a bad transcript is not diagnosable
+    # without knowing which engine produced it.
+    engine: str = ""
+    # Vosk was run against a grammar built from the room list. Phase 7 wires
+    # that up; the field exists now because the contract has it and a
+    # transcript suspiciously close to a real room code means something
+    # different when a grammar was in force.
+    grammar_constrained: bool = False
+
+
+@dataclass
+class AudioView:
+    """Speech-to-text and text-to-speech state for the Audio tab.
+
+    Availability is refreshed on the slow status task, not computed here: it
+    stats the model paths, and file I/O has no business in the 4 Hz state
+    broadcast (same rule as LinkHealth and the vision status file).
+    """
+
+    asr_available: bool = False
+    asr_reason: str = ""
+    asr_engine: str = ""
+    tts_available: bool = False
+    tts_reason: str = ""
+    tts_engine: str = ""
+
+    # A mic channel is open and audio is reaching the recognizer.
+    listening: bool = False
+    # The in-progress hypothesis. Changes as you speak, and is not a
+    # transcript -- never stored as one.
+    partial: str = ""
+    last: TranscriptView = field(default_factory=TranscriptView)
+    # Completed utterances this session, so the panel can tell "heard nothing"
+    # from "not listening at all".
+    utterances: int = 0
+    # Bytes of PCM the recognizer has been fed. Distinguishes a muted mic from
+    # a recognizer that heard audio but found no words in it.
+    audio_bytes: int = 0
+    # Set while synthesized audio is being pushed to the speaker channel.
+    speaking: bool = False
+    last_error: str = ""
+
+
+@dataclass
 class HeadState:
     """Mirrors /head/state, plus the limits the UI needs to render them."""
 
@@ -218,6 +274,7 @@ class RobotState:
     emotion: EmotionState = field(default_factory=EmotionState)
     media: MediaChannels = field(default_factory=MediaChannels)
     perception: PerceptionView = field(default_factory=PerceptionView)
+    audio: AudioView = field(default_factory=AudioView)
     nodes: list[NodeStatus] = field(default_factory=list)
     # Rolling counters, useful for confirming a stream is actually flowing.
     camera_fps_in: float = 0.0

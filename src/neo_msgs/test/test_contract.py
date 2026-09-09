@@ -340,3 +340,20 @@ def test_head_units_differ_between_panel_and_wire_on_purpose(bridge_types):
     by accident in either direction."""
     assert {"pan_deg", "tilt_deg"} <= _mirror_fields(bridge_types.HeadState)
     assert {"pan_rad", "tilt_rad"} <= set(msg_fields("HeadCommand"))
+
+
+def test_transcript_mirror_is_exact(bridge_types):
+    """The panel renders transcripts today from an in-process recognizer; the
+    ROS node will publish the same fields once asr_router exists. They are the
+    same contract and must not become two."""
+    ros = set(msg_fields("Transcript")) - {"header"}
+    assert _mirror_fields(bridge_types.TranscriptView) == ros
+
+
+def test_transcript_engines_match(bridge_types):
+    """`engine` is a uint8 on the wire and a string in the panel. The set of
+    engines has to be the same either way -- the panel shows it verbatim, and a
+    bad transcript is not diagnosable without knowing which produced it."""
+    ros = {k.removeprefix("ENGINE_").lower()
+           for k in msg_consts("Transcript") if k.startswith("ENGINE_")}
+    assert ros == {"vosk", "whisper"}

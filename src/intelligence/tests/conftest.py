@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from intelligence import asr, tts
 from intelligence.config import Config
 from model_conn.config import Config as ModelConnConfig
 from model_conn.config import Endpoint
@@ -20,3 +21,19 @@ def mc_cfg() -> ModelConnConfig:
         Endpoint(name="wifi", host="wifi-host", port=11434),
     ]
     return cfg
+
+
+@pytest.fixture(autouse=True)
+def _clear_speech_caches():
+    """ASR models and TTS voices are cached process-wide, keyed by path.
+
+    Tests inject fake `vosk`/`piper` modules through sys.modules, so a cached
+    object from one test would be served to the next one under a different fake
+    -- passing for the wrong reason, or failing somewhere unrelated. Clear on
+    both sides of every test.
+    """
+    asr.reset_cache()
+    tts.reset_cache()
+    yield
+    asr.reset_cache()
+    tts.reset_cache()

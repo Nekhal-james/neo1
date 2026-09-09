@@ -263,6 +263,136 @@ async def test_tone(request: Request, user: str = Depends(require_session)) -> d
     return result.to_dict()
 
 
+# -- audio (speech to text, text to speech) --------------------------------
+
+MAX_SAY_CHARS = 600
+"""A spoken reply, not a monologue. Also bounds how long one request can hold a
+worker thread synthesizing."""
+
+MAX_WAV_BYTES = 10 * 1024 * 1024
+"""About ten minutes of 16 kHz mono. Generous for a room question; small enough
+that an upload cannot exhaust memory on a 4 GB Pi."""
+
+SPEAKER_CHUNK_BYTES = 2048
+"""Matches the test tone's chunking. Small enough that the browser can start
+playing quickly, large enough not to spend the event loop on framing."""
+
+
+@router.get("/api/audio/status")
+async def audio_status(request: Request, user: str = Depends(require_session)) -> dict:
+    """Whether speech works, and if not, exactly why.
+
+    The reason matters more than the flag: "ASR unavailable" is
+    indistinguishable from a bug, while "asr.vosk_model_path is not set" is
+    something the operator can go and fix.
+    """
+    speech = request.app.state.speech
+    # Availability normally refreshes on the 1 Hz status task; do it here too so
+    # a freshly-opened panel does not show "checking..." until the next tick.
+    await asyncio.to_thread(speech.refresh_availability)
+    view = speech.view(listening=request.app.state.media.active("mic"))
+    return asdict(view)
+
+
+@router.post("/api/audio/say")
+async def audio_say(request: Request, user: str = Depends(require_session)) -> dict:
+    """Speak `text` through the panel's speaker channel.
+
+    This is the whole text-to-speech path end to end: Piper synthesizes, the
+    result is resampled to the speaker channel's rate, and it is pushed to
+    whichever browsers have the speaker connected. Nothing here is a mock, and
+    the same `intelligence.tts` code runs on the robot.
+    """
+    payload = await request.json()
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        raise HTTPException(400, "text must not be empty")
+    if len(text) > MAX_SAY_CHARS:
+        raise HTTPException(413, f"text must be under {MAX_SAY_CHARS} characters")
+
+    speech = request.app.state.speech
+    bridge = request.app.state.bridge
+
+    try:
+        audio = await speech.say(text)
+    except RuntimeError as exc:
+        # A missing model or package is a configuration problem, not a crash:
+        # 501 with the reason, which is what the panel renders.
+        raise HTTPException(501, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 -- report, never 500 the panel
+        log.exception("speech synthesis failed")
+        raise HTTPException(502, f"speech synthesis failed: {exc}") from exc
+
+    for offset in range(0, len(audio.data), SPEAKER_CHUNK_BYTES):
+        await bridge.emit_audio_out(audio.data[offset : offset + SPEAKER_CHUNK_BYTES])
+
+    return {
+        "ok": True,
+        "text": text,
+        "sample_rate": audio.sample_rate,
+        "duration_s": round(audio.duration_s, 3),
+        "bytes": len(audio.data),
+        # False when nobody has the speaker channel open -- the audio was
+        # produced and dropped. Without this the panel would report success for
+        # something the operator never heard.
+        "speaker_connected": request.app.state.media.active("speaker"),
+    }
+
+
+@router.post("/api/audio/transcribe")
+async def audio_transcribe(request: Request, user: str = Depends(require_session)) -> dict:
+    """Transcribe an uploaded WAV.
+
+    The path that makes speech-to-text testable with no microphone at all --
+    and, later, the one that replays a recorded corridor clip against a tuned
+    model. Body is the raw WAV; mono 16-bit only, because anything else is
+    silently mis-decoded into plausible nonsense rather than failing.
+    """
+    wav_bytes = await request.body()
+    if not wav_bytes:
+        raise HTTPException(400, "request body must be a WAV file")
+    if len(wav_bytes) > MAX_WAV_BYTES:
+        raise HTTPException(413, f"WAV must be under {MAX_WAV_BYTES // (1024 * 1024)} MB")
+
+    speech = request.app.state.speech
+    try:
+        view = await speech.transcribe_wav(wav_bytes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(501, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("transcription failed")
+        raise HTTPException(502, f"transcription failed: {exc}") from exc
+
+    return asdict(view)
+
+
+@router.post("/api/audio/reset")
+async def audio_reset(request: Request, user: str = Depends(require_session)) -> dict:
+    """Drop the current utterance and clear the last transcript.
+
+    Keeps the loaded model: this ends an utterance, it does not reconfigure
+    anything.
+    """
+    request.app.state.speech.reset()
+    return {"ok": True}
+
+
+@router.post("/api/audio/reload")
+async def audio_reload(request: Request, user: str = Depends(require_session)) -> dict:
+    """Re-read config/intelligence.yaml and drop cached models.
+
+    So downloading a Vosk model or a Piper voice and pointing the config at it
+    does not need the panel restarted -- which on the robot means an ssh session
+    and a systemctl call, for a change made in a text file.
+    """
+    speech = request.app.state.speech
+    speech.reload_config()
+    await asyncio.to_thread(speech.refresh_availability)
+    return asdict(speech.view(listening=request.app.state.media.active("mic")))
+
+
 # -- link (model-conn's host/receiver connection) --------------------------
 
 

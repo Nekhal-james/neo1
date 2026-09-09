@@ -69,6 +69,8 @@ function render(s) {
   const open = Object.entries(s.media).filter(([, v]) => v).map(([k]) => k);
   $('v-channels').textContent = open.length ? open.join(', ') : 'none';
 
+  renderAudio(s.audio, s.media);
+
   // system
   $('v-cpu').textContent = `${s.system.cpu_percent.toFixed(0)} %`;
   $('v-mem').textContent = `${(s.system.mem_used_mb / 1000).toFixed(2)} / ${(s.system.mem_total_mb / 1000).toFixed(2)} GB`;
@@ -594,6 +596,119 @@ function secureContextHint(what, err) {
   return `Could not open the ${what}: ${err.name}`;
 }
 
+// ----------------------------------------------------------------- audio
+
+// Availability comes from the 4 Hz state snapshot rather than its own poll:
+// the server refreshes it on a 1 Hz task precisely so that reading it here is
+// free. /api/audio/status exists for the first paint and for curl.
+function renderAudio(a, media) {
+  if (!a) return;
+
+  $('v-asr-engine').textContent = a.asr_engine || '—';
+  $('v-asr-status').textContent = a.asr_available ? 'ready' : 'unavailable';
+  $('v-asr-listening').textContent = a.listening ? 'yes — mic channel open' : 'no';
+  $('v-asr-bytes').textContent = a.audio_bytes ? `${(a.audio_bytes / 1024).toFixed(0)} KB` : '—';
+  $('v-asr-count').textContent = String(a.utterances || 0);
+
+  $('v-tts-engine').textContent = a.tts_engine || '—';
+  $('v-tts-status').textContent = a.tts_available ? 'ready' : 'unavailable';
+  // Only the state snapshot knows about channels; a direct /api/audio/*
+  // response does not, and must leave this field alone rather than flashing
+  // "not connected" at someone whose speaker is fine.
+  if (media) {
+    $('v-tts-speaker').textContent = media.speaker ? 'connected' : 'not connected';
+  }
+
+  // The reason, not just the flag: "unavailable" alone is indistinguishable
+  // from a bug, and every reason the server sends names something fixable.
+  showReason('asr-warning', a.asr_available, a.asr_reason);
+  showReason('tts-warning', a.tts_available, a.tts_reason);
+
+  $('v-asr-partial').textContent = a.partial || '—';
+  $('v-asr-final').textContent = (a.last && a.last.text) || '—';
+  $('v-asr-conf').textContent = a.last && a.last.text
+    ? `${(a.last.confidence || 0).toFixed(2)} · ${a.last.engine || '?'}`
+    : '—';
+
+  if (a.last_error) showReason('asr-warning', false, a.last_error);
+}
+
+function showReason(id, ok, reason) {
+  const el = $(id);
+  if (!el) return;
+  if (ok || !reason) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = reason;
+}
+
+const sayInput = $('say-input');
+const sayBtn = $('btn-say');
+
+async function speak(text) {
+  if (!text) return;
+  const out = $('say-answer');
+  sayBtn.disabled = true;
+  out.hidden = false;
+  out.className = 'answer';
+  out.textContent = 'Synthesizing…';
+
+  try {
+    const res = await fetch('/api/audio/say', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (res.status === 401) { window.location = '/login'; return; }
+    const body = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      out.className = 'answer bad';
+      out.textContent = body.detail || `request failed (${res.status})`;
+      return;
+    }
+    // Audio with nobody connected is produced and dropped. Saying "spoke"
+    // for something the operator never heard is the confusing outcome.
+    out.className = 'answer ' + (body.speaker_connected ? 'good' : '');
+    out.textContent = body.speaker_connected
+      ? `Spoke ${body.duration_s.toFixed(1)}s at ${body.sample_rate} Hz.`
+      : `Synthesized ${body.duration_s.toFixed(1)}s — but no speaker is connected, `
+        + `so nobody heard it. Connect the speaker on the Sources tab.`;
+  } catch (err) {
+    out.className = 'answer bad';
+    out.textContent = String(err);
+  } finally {
+    sayBtn.disabled = false;
+  }
+}
+
+sayBtn.addEventListener('click', () => speak(sayInput.value.trim()));
+sayInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') speak(sayInput.value.trim());
+});
+
+$('btn-say-heard').addEventListener('click', () => {
+  const heard = $('v-asr-final').textContent;
+  if (heard && heard !== '—') speak(heard);
+});
+
+$('btn-asr-reset').addEventListener('click', () => post('/api/audio/reset'));
+$('btn-audio-reload').addEventListener('click', async () => {
+  const btn = $('btn-audio-reload');
+  btn.disabled = true;
+  try {
+    const view = await post('/api/audio/reload');
+    if (view) renderAudio(view, null);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function loadAudioStatus() {
+  const res = await fetch('/api/audio/status');
+  if (res.status === 401) { window.location = '/login'; return; }
+  if (res.ok) renderAudio(await res.json(), null);
+}
+
 // ------------------------------------------------------------------ boot
 
 loadConfig().then(() => { $('deadman-ms').textContent = config.joyDeadmanMs; });
@@ -601,6 +716,7 @@ connectState();
 pollLinkStatus();
 pollDialogStatus();
 pollModelStatus();
+loadAudioStatus();
 setInterval(pollLinkStatus, POLL_MS);
 setInterval(pollDialogStatus, POLL_MS);
 setInterval(pollModelStatus, POLL_MS);

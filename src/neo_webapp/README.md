@@ -106,6 +106,11 @@ For unattended provisioning: `NEO_ADMIN_PASSWORD=... neo --webapp setup`.
 | GET | `/api/dialog/status` | yes | intelligence's last chat turn — polled by the Dialog tab |
 | GET | `/api/model/status` | yes | what `neo --model … up` is serving, plus the config-mismatch check |
 | POST | `/api/dialog/ask` | yes | `{text}` → ask the model, same path as `neo --prompt` |
+| GET | `/api/audio/status` | yes | whether speech works, and if not, exactly why |
+| POST | `/api/audio/say` | yes | `{text}` → Piper synthesizes, audio goes to the speaker channel |
+| POST | `/api/audio/transcribe` | yes | body is a mono 16-bit WAV → transcript (no microphone needed) |
+| POST | `/api/audio/reset` | yes | end the current utterance, keep the loaded model |
+| POST | `/api/audio/reload` | yes | re-read intelligence config and drop cached models |
 | POST | `/api/perception/identify` | yes | "what is this?" — one object-model pass on a live frame |
 | POST | `/api/perception/release` | yes | drop the engagement lock (operator override) |
 | POST | `/api/perception/reset` | yes | clear all tracks and ids — after moving the camera |
@@ -171,9 +176,43 @@ Both were invisible without a test, and both now have regressions in
   `snapshot()`, because reading it is file I/O and that is exactly what the
   broadcast loop must not do.
 
+## Speech
+
+The Audio tab drives the real engines from `intelligence` — the same Vosk and
+Piper code that will run on the robot — so the whole speech path is exercisable
+with nothing but a browser.
+
+**Hearing.** Mic chunks arriving on `/ws/mic` go to the recognizer as well as to
+the bridge, so the panel transcribes what it hears rather than only metering it.
+There is deliberately no separate "start listening" call: **the mic channel
+being open is the listening window.** On the robot the wake word owns that gate
+(CLAUDE.md), and until it exists the operator opening the channel is the gate —
+which keeps the panel honest about never recognizing audio nobody asked it to.
+Closing the channel flushes, because otherwise the last word is dropped whenever
+someone stops the mic instead of pausing long enough for Vosk to endpoint.
+
+Recognition failures never close the mic channel. A missing model must not take
+the microphone down with it — it is also feeding the meter, the bridge, and
+eventually the wake word.
+
+**Speaking.** `POST /api/audio/say` synthesizes, resamples to the speaker
+channel's rate, and pushes the PCM to whichever browsers have the speaker
+connected. The response reports `speaker_connected`, because audio produced with
+nobody attached is produced and dropped — and reporting success for something
+the operator never heard is the confusing outcome.
+
+**When speech is off,** which is the normal case until models are downloaded,
+every route fails as a configuration problem (501) carrying the reason, and the
+tab shows it. "ASR unavailable" on its own is indistinguishable from a bug;
+"`asr.vosk_model_path` is not set" is something you can go and fix.
+
+Availability is refreshed on the 1 Hz status task, not in `snapshot()`: it stats
+the model paths, and file I/O has no business in the 4 Hz state broadcast — the
+same rule as the link status and the vision status file.
+
 ## Tabs, and the phase that fills each one
 
-Sources, System, Head, Vision, and Dialog are live. Audio, Data, Emotion, and Logs
-are stubs labelled with the phase that fills them — see plan §2.5. Building them
-this way keeps the panel useful throughout rather than deferring a monolithic UI
-phase to the end.
+Sources, System, Head, Vision, Dialog, and Audio are live. Data, Emotion, and
+Logs are stubs labelled with the phase that fills them — see plan §2.5. Building
+them this way keeps the panel useful throughout rather than deferring a
+monolithic UI phase to the end.
