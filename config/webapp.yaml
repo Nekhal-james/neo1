@@ -11,6 +11,15 @@ server:
     # Required for the webapp camera/mic sources from any device other than the
     # host: browsers only grant getUserMedia in a secure context.
     enabled: true
+    # Self-signed by `neo --webapp devcert` -- fine on the machine itself, but
+    # every browser warns, and a warned-past certificate is still a secure
+    # context only after you click through.
+    #
+    # For real use issue one from the project CA instead (`neo --tls panel`)
+    # and override these two lines in config/webapp.local.yaml:
+    #   certfile: certs/panel/panel-cert.pem
+    #   keyfile: certs/panel/panel-key.pem
+    # Then install the CA on your phone once -- see docs/security.md.
     certfile: certs/dev-cert.pem
     keyfile: certs/dev-key.pem
 

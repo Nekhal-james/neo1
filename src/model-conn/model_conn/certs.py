@@ -19,8 +19,18 @@ from pathlib import Path
 CA_COMMON_NAME = "Neo private CA"
 SERVER_COMMON_NAME = "neo-model-conn-host"
 CLIENT_COMMON_NAME = "neo-model-conn-receiver"
+PANEL_COMMON_NAME = "neo-admin-panel"
 
 _VALIDITY_DAYS = 3650  # 10 years -- this is a private, manually-rotated CA
+
+# The panel's certificate is the only one a *browser* ever sees, and browsers
+# police server-certificate lifetimes: Apple platforms reject TLS server certs
+# valid for more than 398 days. Whether that applies to a root you installed
+# yourself has varied by OS version, so this stays inside the limit rather than
+# depending on the exemption holding. Reissuing is one command (`neo --tls
+# panel`), which is a smaller cost than an iPhone that refuses the panel and
+# gives no useful reason why.
+_PANEL_VALIDITY_DAYS = 397
 
 
 def _require_cryptography():
@@ -110,6 +120,7 @@ def _issue_leaf_cert(
     extended_key_usage,
     dns_names: list[str],
     ip_addresses: list[str],
+    validity_days: int = _VALIDITY_DAYS,
 ) -> None:
     _require_cryptography()
     from cryptography import x509
@@ -133,7 +144,7 @@ def _issue_leaf_cert(
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(minutes=5))
-        .not_valid_after(now + dt.timedelta(days=_VALIDITY_DAYS))
+        .not_valid_after(now + dt.timedelta(days=validity_days))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(extended_key_usage, critical=False)
         .add_extension(
@@ -205,6 +216,65 @@ def generate_client_cert(
         dns_names=[],
         ip_addresses=[],
     )
+
+
+def generate_panel_cert(
+    *,
+    ca_cert_path: Path,
+    ca_key_path: Path,
+    cert_path: Path,
+    key_path: Path,
+    dns_names: list[str],
+    ip_addresses: list[str],
+) -> None:
+    """Server cert for the admin panel, from the same CA as the link's.
+
+    One CA for both is the whole point: you install it once on your phone and
+    laptop and then *both* the panel and the off-board link are trusted, with no
+    click-through warning to train yourself to ignore. Two CAs would mean two
+    installs and, in practice, one of them skipped.
+
+    This replaces neo_webapp's self-signed `make_dev_cert.py` output (whose
+    docstring says exactly that). It is not cosmetic: browsers only grant
+    getUserMedia in a secure context, so the webapp camera and mic backends do
+    not work at all from another device without a certificate the browser
+    accepts (plan 0.3.1).
+    """
+    from cryptography.x509.oid import ExtendedKeyUsageOID
+    from cryptography import x509
+
+    _issue_leaf_cert(
+        ca_cert_path=ca_cert_path,
+        ca_key_path=ca_key_path,
+        cert_path=cert_path,
+        key_path=key_path,
+        common_name=PANEL_COMMON_NAME,
+        extended_key_usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+        dns_names=dns_names,
+        ip_addresses=ip_addresses,
+        validity_days=_PANEL_VALIDITY_DAYS,
+    )
+
+
+def panel_hostnames_and_ips() -> tuple[list[str], list[str]]:
+    """Names the panel is reached by. The Pi is `neo`, not `neo-brain`.
+
+    Kept apart from `local_hostnames_and_ips` above, which names the *laptop*:
+    issuing the panel cert with the laptop's SANs is a mistake that only shows
+    up later, as a browser refusing a connection from a phone.
+    """
+    import socket
+
+    hostnames = {"localhost", "neo", "neo.local", socket.gethostname()}
+    ips = {"127.0.0.1"}
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            addr = info[4][0]
+            if ":" not in addr:  # IPv4 only
+                ips.add(addr)
+    except OSError:
+        pass
+    return sorted(hostnames), sorted(ips)
 
 
 def local_hostnames_and_ips() -> tuple[list[str], list[str]]:

@@ -230,7 +230,48 @@ Do not start writing nodes while benches are pending. Bench A and Bench E can ea
 *Goal: the seams exist, the CA exists, and CI runs.*
 *Estimate: 2–3 days.*
 
-### Steps
+### 1.0 Status: landed
+
+`neo_msgs` and `neo_bringup` exist, the CA covers all three certificates, and
+CI runs. Four deviations from the steps below, each deliberate:
+
+* **Two packages, not ten.** The §1.3 layout was written before any code
+  existed, and the four packages that were built diverged from it — `model_conn`
+  is `neo_dialog`'s `llm_client`, `intelligence` covers `neo_audio`'s ASR/TTS
+  plus prompts. Creating six empty skeletons for packages whose shape is now
+  uncertain would have to be undone in the phase that fills them. Instead
+  `neo_bringup/config/nodes.yaml` is the registry of every node the robot will
+  ever run, with the phase that makes each real; profiles reference nodes that
+  do not exist yet, and the launch file skips them with a log line.
+
+* **`DEGRADED` and `ESTOP` are flags on `DialogState`, not values of it.**
+  §1.2 lists six flat states; §8.1 of this same document calls them a modifier
+  and an override, and that reading is correct. The laptop is usually away, so
+  Neo runs the full `IDLE → LISTENING → THINKING → SPEAKING` cycle *while*
+  degraded (§0.3.3). A flat enum cannot express "listening, with the link down",
+  which is the single most common state this robot will be in. The panel still
+  renders one badge, flattening back to the six labels for display.
+
+* **`colcon build` covers only these two packages.** The four Python packages
+  carry a `COLCON_IGNORE` — they have no per-package `setup.py` by design (one
+  root `setup.py`, deliberately), so colcon would fail on them. See CLAUDE.md's
+  Status section for what that does and does not buy.
+
+* **The admin panel's certificate now comes from the project CA** (`neo --tls
+  panel`), replacing the self-signed devcert, and is capped at 397 days because
+  it is the only certificate a browser sees and Apple platforms reject longer
+  ones. See [security.md](security.md).
+
+Also landed, beyond the steps: `neo_msgs/test/test_contract.py`, which asserts
+the frozen contracts have not drifted from the Python mirror dataclasses already
+shipping in `neo_webapp.bridge.types` and `neo_perception.types`. Those mirrors
+are what the admin panel runs on today with no ROS installed, and nothing else
+in the repo would notice if the two diverged.
+
+Still outstanding for this phase: the Bench-dependent items are Phase 0's, and
+`launch_testing` integration tests wait on there being a node to integrate.
+
+### 1.1 Original steps
 
 1. Create the colcon workspace and the ten package skeletons from §1.3. Python packages use `ament_python`; `neo_msgs` uses `ament_cmake` + `rosidl`.
 2. **Define every message and service in §1.2 now, in one pass.** Getting these wrong is the expensive mistake; changing them later touches every package. Review against the node map before writing a single node.

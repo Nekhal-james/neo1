@@ -1,0 +1,38 @@
+# Ask the campus knowledge base, on /kb/query.
+#
+# Deterministic lookup over the structured dataset -- no embeddings, no vector
+# store, no similarity search (CLAUDE.md). Runs entirely on the Pi, so this
+# service answers identically whether or not the laptop is awake, which is the
+# point of the info-desk role.
+
+string query          # normalised or raw; the service normalises either way
+
+# Where the asker is standing. Empty means the reception node where Neo lives,
+# which is the right default for a desk robot and the only origin it will have
+# until there is a body to move.
+string origin_node
+---
+# The rendered answer, ready to speak. Produced by the template renderer, which
+# is the primary output path and not a fallback -- when the link is up an LLM
+# may re-phrase it, but it may not change a fact.
+string answer
+
+float32 confidence
+
+# The four outcomes, kept distinct because they are four different sentences and
+# collapsing them is how a robot starts inventing rooms (plan 7.2.6).
+uint8 ANSWERED = 0
+uint8 ROOM_UNKNOWN = 1          # block is surveyed, so the room really isn't there
+uint8 BLOCK_NOT_SURVEYED = 2    # "I haven't learned C block yet" -- not the same thing
+uint8 AMBIGUOUS = 3             # several candidates; ask a clarifying question
+uint8 outcome
+
+# True for ANSWERED and for the two honest misses -- this was an info-desk
+# question and the KB owns it. False means "not my domain, try the LLM path",
+# which is what the intent router branches on.
+bool in_domain
+
+# Candidate codes when outcome is AMBIGUOUS, so the caller can build the
+# clarifying question ("CS-204 in B block, or CS-240 in C block?") without a
+# second round trip.
+string[] candidates

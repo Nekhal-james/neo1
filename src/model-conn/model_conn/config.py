@@ -67,6 +67,13 @@ class TlsConfig:
     server_key: str = "certs/model_conn/server-key.pem"
     client_cert: str = "certs/model_conn/client-cert.pem"
     client_key: str = "certs/model_conn/client-key.pem"
+    # The admin panel's own server cert, issued by the SAME CA (plan Phase 1,
+    # step 3). Separate from server_cert above, which is the laptop's: the two
+    # are different machines with different names, and the panel's is the one
+    # a phone has to trust. Sharing a CA is what makes that one install
+    # instead of two.
+    panel_cert: str = "certs/panel/panel-cert.pem"
+    panel_key: str = "certs/panel/panel-key.pem"
 
 
 @dataclass
@@ -112,6 +119,14 @@ class Config:
     def client_key_path(self) -> Path:
         return _resolve(self.tls.client_key)
 
+    @property
+    def panel_cert_path(self) -> Path:
+        return _resolve(self.tls.panel_cert)
+
+    @property
+    def panel_key_path(self) -> Path:
+        return _resolve(self.tls.panel_key)
+
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
         p = _config_path(path)
@@ -150,6 +165,8 @@ class Config:
                 server_key=tls_raw.get("server_key", "certs/model_conn/server-key.pem"),
                 client_cert=tls_raw.get("client_cert", "certs/model_conn/client-cert.pem"),
                 client_key=tls_raw.get("client_key", "certs/model_conn/client-key.pem"),
+                panel_cert=tls_raw.get("panel_cert", "certs/panel/panel-cert.pem"),
+                panel_key=tls_raw.get("panel_key", "certs/panel/panel-key.pem"),
             ),
             status_file=raw.get("status_file", "var/model_conn/status.json"),
             host_status_file=raw.get(

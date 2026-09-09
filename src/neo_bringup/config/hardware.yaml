@@ -1,0 +1,33 @@
+# hardware -- the robot at the desk. The profile that actually ships.
+#
+# Everything from the Pi's own devices. The admin panel's light API stays up
+# (it is how you see what the robot is doing), but the media bridge is not
+# started: it is the expensive half, and on 4 cores with YOLO running it must
+# only exist while someone is using it (plan 0.3.4).
+
+profile: hardware
+description: Pi camera, USB mic, attached speaker, servos live.
+
+sources:
+  camera: hardware
+  mic: hardware
+  speaker: hardware
+
+nodes:
+  source_manager: true
+
+  camera_hw: true
+  mic_hw: true
+  speaker_hw: true
+
+  servo_driver: true
+  head_behavior: true
+
+  perception: true
+  wake_word: true
+  asr_router: true
+  tts: true
+  link: true
+  kb: true
+  dialog: true
+  emotion: true

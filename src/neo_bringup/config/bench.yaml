@@ -1,0 +1,40 @@
+# bench -- measurement only, nothing that moves.
+#
+# For the Phase 0 benchmarks and any later profiling run: the camera and the
+# perception stack, and nothing else competing for the four cores. Servos are
+# off because a benchmark should not be able to swing the head, and the audio
+# stack is off because its CPU would contaminate the number being measured.
+#
+# Measure the always-on set separately and add the numbers; running everything
+# at once tells you the total but not which part to attack.
+
+profile: bench
+description: Camera and perception only. No servos, no audio, no link.
+
+sources:
+  # Audio is set to webapp rather than hardware so no Pi audio device is opened
+  # at all. There is no third "off" backend and there should not be -- the whole
+  # system has exactly two (CLAUDE.md) -- so "nothing on the Pi" is expressed by
+  # pointing the stream away from it and leaving the nodes below switched off.
+  camera: hardware
+  mic: webapp
+  speaker: webapp
+
+nodes:
+  source_manager: true
+
+  camera_hw: true
+  mic_hw: false
+  speaker_hw: false
+
+  servo_driver: false
+  head_behavior: false
+
+  perception: true
+  wake_word: false
+  asr_router: false
+  tts: false
+  link: false
+  kb: false
+  dialog: false
+  emotion: false

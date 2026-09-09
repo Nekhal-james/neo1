@@ -13,7 +13,7 @@ tracks what currently exists.
 
 ## Status
 
-Four packages under `src/` are implemented and tested; the rest of the plan
+Six packages under `src/` are implemented and tested; the rest of the plan
 (motion, wake word, the vectorless campus-data engine) has not been started.
 
 | Package | Implements | Status |
@@ -22,15 +22,20 @@ Four packages under `src/` are implemented and tested; the rest of the plan
 | [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification |
 | [`model_conn`](src/model-conn/README.md) | Phase 6 (partial) — the off-board LLM host/receiver link | CLI for serving the model (host) and checking the link (receiver); real mTLS via a private CA (`neo --tls init`) |
 | [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; local Vosk STT and Piper TTS wired up; RAG data folder and system prompt are placeholders |
+| [`neo_msgs`](src/neo_msgs/README.md) | Phase 1 — the frozen message/service contracts | All 15 interfaces defined; a contract test guards them against drifting from the Python mirrors the panel runs on |
+| [`neo_bringup`](src/neo_bringup/README.md) | Phase 1 — launch profiles | `dev`, `hardware`, `hybrid`, `bench`; the node registry lists every node the robot will run and which phase makes it real |
 
-All four run with no Pi, no ROS, and no servos attached — `neo_webapp` via a
+All of them run with no Pi, no ROS, and no servos attached — `neo_webapp` via a
 `MockBridge` that simulates the robot, `neo_perception` against any camera
 the panel is using, `model_conn`/`intelligence` against whatever endpoints
 you point them at.
 
-Roughly 313 tests across the four packages. Run each from inside its own
-directory (`cd src/neo_webapp && python -m pytest -q`) — the four
-`tests/conftest.py` files collide if you point pytest at `src/` as a whole.
+377 tests. Run each package from inside its own directory
+(`cd src/neo_webapp && python -m pytest -q`) — the four `tests/conftest.py`
+files collide if you point pytest at `src/` as a whole. `neo_msgs` and
+`neo_bringup` are tested the same way with plain pytest: their tests read the
+`.msg`/`.srv` and profile YAML as text, so no ROS install is needed for them
+either.
 
 ### What the robot can currently do
 
@@ -64,12 +69,18 @@ src/
   neo_perception/            YOLO pose pipeline, gestures, gaze/engagement
   model-conn/                neo CLI: off-board LLM host serving + link checks
   intelligence/              prompts, RAG data, chat/ASR/TTS
+  neo_msgs/                  frozen message + service contracts (ROS, no logic)
+  neo_bringup/               launch profiles and the node registry (ROS)
+docs/security.md             the CA, the three certificates, installing them
+.github/workflows/ci.yml     pytest + lint + a colcon build on Jazzy
 ```
 
-There is exactly one way to `pip install` this repo: from the root, below.
-Packages under `src/` keep their own `package.xml` (ROS metadata for a future
-colcon build) but have no `setup.py` of their own, so there's no independent
-per-package install path to fall out of sync with the root one.
+There is exactly one way to `pip install` this repo: from the root, below. The
+four Python packages keep their own `package.xml` but have no `setup.py` of
+their own, so there's no independent per-package install path to fall out of
+sync with the root one. They carry a `COLCON_IGNORE` for the same reason —
+`colcon build` covers `neo_msgs` and `neo_bringup`, pip covers the rest, and
+CLAUDE.md explains what that split does and does not buy.
 
 ## Getting started
 
@@ -82,6 +93,19 @@ pip install -e ".[dev]"
 
 The `dev` extras give you testing tools and install `neo_webapp` properly so
 the `neo` CLI can find it.
+
+On a machine with ROS 2 Jazzy, build the two ROS packages alongside it:
+
+```bash
+colcon build --symlink-install
+. install/setup.bash
+ros2 interface show neo_msgs/msg/HeadCommand    # the frozen contract
+ros2 launch neo_bringup neo.launch.py profile:=dev
+```
+
+The launch file skips any node whose package has not been built yet, with a log
+line saying which plan phase makes it real — so it is usable now rather than
+only once the project is finished.
 
 To run the admin panel against a simulated robot:
 
@@ -126,9 +150,12 @@ Nothing enforces that, and getting it wrong produces a degraded reply with no
 visible cause, so the panel says so and tells you the name to set.
 
 Set up mutual TLS for the off-board link once (`neo --tls init` generates a
-private CA plus a server cert for the host and a client cert for the Pi —
-see [src/model-conn/README.md](src/model-conn/README.md)), then set
-`tls.enabled: true` in `config/model_conn.local.yaml` on both machines.
+private CA plus a server cert for the host and a client cert for the Pi), then
+set `tls.enabled: true` in `config/model_conn.local.yaml` on both machines. The
+admin panel takes its certificate from that same CA (`neo --tls panel`), so
+installing the CA once on your phone makes both the panel and the link trusted —
+which matters because a browser will not grant the camera or microphone at all
+without it. Full procedure in [docs/security.md](docs/security.md).
 
 See [src/neo_webapp/README.md](src/neo_webapp/README.md),
 [src/neo_perception/README.md](src/neo_perception/README.md),
@@ -143,5 +170,8 @@ placeholders.
 Motion (servo driver), wake word, off-board Whisper (ASR upgrade when the
 link is healthy), the vectorless campus-data engine (RAG data folder exists,
 retrieval logic doesn't), and the emotion layer — see the plan for ordering.
+The ROS nodes wrapping the existing Python cores are also unbuilt: `nodes/*.py`
+in each package documents its topics and raises `NotImplementedError`. The
+contracts they need now exist, so they are unblocked.
 Full-body locomotion is out of
 scope until asked for.

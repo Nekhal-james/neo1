@@ -1,0 +1,98 @@
+# The node registry: every ROS node Neo will ever start, and where it lives.
+#
+# One source of truth, read by two things that must not disagree:
+#   * launch/neo.launch.py, which turns the enabled ones into Node actions
+#   * test/test_profiles.py, which validates the profiles against it with no
+#     ROS installed
+#
+# `phase` is the plan phase that makes the node real. A node listed here with a
+# phase above the current one is expected to be missing at runtime -- the launch
+# file skips it with a log line rather than failing the whole bringup, which is
+# what lets one launch file serve the project from Phase 1 to Phase 10.
+
+nodes:
+  # --- Phase 2: the hardware/webapp seam -------------------------------------
+  source_manager:
+    package: neo_sources
+    executable: source_manager
+    phase: 2
+    description: Owns /sources/set; activates one backend and deactivates the other.
+  camera_hw:
+    package: neo_perception
+    executable: camera_hw
+    phase: 2
+    description: Pi Camera (CSI) via camera_ros, as a managed lifecycle node.
+  mic_hw:
+    package: neo_audio
+    executable: mic_hw
+    phase: 2
+    description: USB microphone on the Pi.
+  speaker_hw:
+    package: neo_audio
+    executable: speaker_hw
+    phase: 2
+    description: Attached speaker.
+
+  # --- Phase 3: motion -------------------------------------------------------
+  servo_driver:
+    package: neo_motion
+    executable: servo_driver
+    phase: 3
+    description: PCA9685 over I2C. Clamps, slew-limits, and holds on watchdog expiry.
+  head_behavior:
+    package: neo_motion
+    executable: head_behavior
+    phase: 3
+    description: Priority arbiter producing /head/command at 50 Hz.
+
+  # --- Phase 4: perception ---------------------------------------------------
+  perception:
+    package: neo_perception
+    executable: perception_node
+    phase: 4
+    description: Pose detection, gestures, engagement, gaze target.
+
+  # --- Phase 5: audio --------------------------------------------------------
+  wake_word:
+    package: neo_audio
+    executable: wake_word
+    phase: 5
+    description: Owns the mic in IDLE. Nothing downstream runs until this fires.
+  asr_router:
+    package: neo_audio
+    executable: asr_router
+    phase: 5
+    description: Vosk on the Pi always; off-board Whisper only while the link is up.
+  tts:
+    package: neo_audio
+    executable: tts
+    phase: 5
+    description: Piper, local, streaming sentence by sentence.
+
+  # --- Phase 6: the off-board link -------------------------------------------
+  link:
+    package: model_conn
+    executable: link_node
+    phase: 6
+    description: The only node permitted to talk to the laptop. Publishes /link/health.
+
+  # --- Phase 7: campus data --------------------------------------------------
+  kb:
+    package: neo_kb
+    executable: kb_service
+    phase: 7
+    description: Vectorless retrieval over the campus dataset. Fully local.
+
+  # --- Phase 8: conversation -------------------------------------------------
+  dialog:
+    package: intelligence
+    executable: dialog_node
+    phase: 8
+    description: The conversation state machine.
+
+  # --- Phase 9: emotion ------------------------------------------------------
+  emotion:
+    package: neo_emotion
+    executable: emotion_node
+    phase: 9
+    description: Publishes /emotion/state. Has no path to servo_driver, by design.

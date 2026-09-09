@@ -19,6 +19,10 @@ Set up mTLS (run once on the host, then copy the client cert/key + CA cert
 to the Pi -- see the printed paths):
     neo --tls init
 
+Issue the admin panel's certificate from that same CA (run on the Pi, once the
+CA cert and key are there). One CA for both means one install on your phone:
+    neo --tls panel
+
 `--webapp ...` forwards every flag it doesn't itself recognize straight to
 neo_webapp's own CLI -- including neo_webapp's own `--config`, which is a
 *different* file than the one below. model_conn's `--config` only applies to
@@ -36,7 +40,7 @@ from .config import Config
 from .status_store import write_status
 
 WEBAPP_SUBCOMMANDS = ("up", "setup", "devcert")
-TLS_SUBCOMMANDS = ("init",)
+TLS_SUBCOMMANDS = ("init", "panel")
 
 
 def _webapp_probe() -> argparse.ArgumentParser:
@@ -229,9 +233,61 @@ def _cmd_tls_init(cfg: Config) -> int:
     return 0
 
 
+def _cmd_tls_panel(cfg: Config) -> int:
+    """`neo --tls panel` -- issue the admin panel's server certificate from the
+    same private CA as the link's.
+
+    Run this on the Pi, after `neo --tls init` has created the CA (or after
+    copying an existing ca-cert/ca-key over). Separate from `init` because it
+    runs on a different machine at a different time: `init` runs on the laptop,
+    which is where the CA is born and where its key should stay.
+
+    Safe to re-run -- reissue after the Pi changes address or gains a name.
+    """
+    from . import certs
+
+    if not (cfg.ca_cert_path.exists() and cfg.ca_key_path.exists()):
+        print(
+            f"[model-conn] no CA at {cfg.ca_cert_path} / {cfg.ca_key_path}.\n"
+            "Run `neo --tls init` first, or copy the CA cert AND key here from "
+            "the machine that has them -- signing a new cert needs the key, not "
+            "just the cert.",
+            file=sys.stderr,
+        )
+        return 1
+
+    dns_names, ips = certs.panel_hostnames_and_ips()
+    certs.generate_panel_cert(
+        ca_cert_path=cfg.ca_cert_path,
+        ca_key_path=cfg.ca_key_path,
+        cert_path=cfg.panel_cert_path,
+        key_path=cfg.panel_key_path,
+        dns_names=dns_names,
+        ip_addresses=ips,
+    )
+
+    print(f"[model-conn] panel cert:    {cfg.panel_cert_path}")
+    print(f"[model-conn] panel key:     {cfg.panel_key_path}")
+    print(f"[model-conn] names:         {', '.join(dns_names)}")
+    print(f"[model-conn] ips:           {', '.join(ips)}")
+    print(
+        "\nPoint the panel at it in config/webapp.local.yaml:\n"
+        "  server:\n"
+        "    tls:\n"
+        f"      certfile: {cfg.tls.panel_cert}\n"
+        f"      keyfile: {cfg.tls.panel_key}\n"
+        "\nThen install the CA certificate on the devices you browse from -- see "
+        "docs/security.md. Until you do, the browser still warns, and without a "
+        "trusted certificate it will refuse the camera and microphone outright."
+    )
+    return 0
+
+
 def _cmd_tls(subcommand: str, cfg: Config) -> int:
     if subcommand == "init":
         return _cmd_tls_init(cfg)
+    if subcommand == "panel":
+        return _cmd_tls_panel(cfg)
     print(f"[model-conn] usage: neo --tls {{{','.join(TLS_SUBCOMMANDS)}}}")
     return 1
 

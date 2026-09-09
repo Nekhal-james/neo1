@@ -1,0 +1,26 @@
+# Switch one stream between the hardware and webapp backends, on /sources/set.
+#
+# Runtime, per stream -- never a build-time flag or a forked node (CLAUDE.md).
+#
+# The call is transactional: activate the new backend, wait for it to reach
+# ACTIVE, switch the mux, then deactivate the old one. If activation fails it
+# rolls back and reports; it never leaves both backends inactive, which on a
+# 4 GB Pi is the failure that silently kills a stream nobody is watching.
+
+uint8 STREAM_CAMERA = 1
+uint8 STREAM_MIC = 2
+uint8 STREAM_SPEAKER = 3
+uint8 stream
+
+uint8 BACKEND_HARDWARE = 0
+uint8 BACKEND_WEBAPP = 1
+uint8 backend
+---
+bool success
+
+# Why it failed, for the panel to show verbatim. Empty on success.
+string message
+
+# State after the call -- including after a rollback, so a caller never has to
+# follow up with a read to find out what it is now looking at.
+neo_msgs/SourceState state

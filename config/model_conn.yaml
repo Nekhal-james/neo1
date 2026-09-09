@@ -39,6 +39,12 @@ tls:
   server_key: certs/model_conn/server-key.pem
   client_cert: certs/model_conn/client-cert.pem
   client_key: certs/model_conn/client-key.pem
+  # The admin panel's server cert, issued from the same CA by `neo --tls panel`
+  # (run on the Pi). Deliberately the same CA as the link's, so one CA install
+  # on your phone covers both -- see docs/security.md. Point webapp.local.yaml's
+  # server.tls.certfile/keyfile at these to use them.
+  panel_cert: certs/panel/panel-cert.pem
+  panel_key: certs/panel/panel-key.pem
 
 # Both relative to the repo root, both gitignored.
 # status_file      written by the *receiver* (`--connection:status`/`ping`):

@@ -1,0 +1,21 @@
+Skipped by `colcon build`, on purpose.
+
+This package declares build_type ament_python in package.xml but deliberately
+has no setup.py of its own: pip installation for the whole repo is consolidated
+in the root setup.py, so that there is exactly one way to install everything
+(see that file's docstring, and ../../README.md). colcon would try to build it
+and fail on the missing setup.py, taking neo_msgs and neo_bringup down with it.
+
+So the two install paths are split, and both work:
+
+  pip install -e ".[dev]"   -> this package and the other three
+  colcon build              -> neo_msgs and neo_bringup
+
+That is enough to run the ROS nodes: rclpy finds neo_msgs from the sourced
+colcon overlay, and finds this package because pip put it on the Python path.
+What it does NOT provide is `ros2 run` / `ros2 launch` discovery of this
+package's executables, which need an ament index entry.
+
+Remove this file, and add a per-package setup.py, in the phase that first needs
+`ros2 run` for this package -- not before. Until then the root setup.py's
+console_scripts are the entry points.

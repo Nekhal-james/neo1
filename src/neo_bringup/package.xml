@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>neo_bringup</name>
+  <version>0.1.0</version>
+  <description>Launch files, profiles, and the node registry for the Neo robot.</description>
+  <maintainer email="funkydude450@gmail.com">Nekhal James</maintainer>
+  <license>MIT</license>
+
+  <!--
+    ament_cmake, not ament_python, even though the launch file is Python: this
+    package installs data (launch/ and config/) and ships no importable module,
+    so there is nothing for setuptools to do. It also keeps the repo's "one
+    setup.py at the root" rule intact -- see ../../setup.py.
+  -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <!--
+    Nodes referenced by config/nodes.yaml are deliberately NOT exec_depends:
+    most belong to phases that have not landed, and the launch file skips a
+    missing package with a log line rather than failing. Declaring them here
+    would make this package unbuildable until the project was finished.
+  -->
+
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

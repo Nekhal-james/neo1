@@ -140,3 +140,67 @@ def test_tls_config_flag_is_recognized(monkeypatch, tmp_path):
     rc = main(["--tls", "init", "--config", str(cfg_path)])
     assert rc == 0
     assert seen_cfg_paths == [cfg_path]
+
+
+def _tls_config(tmp_path: Path) -> Path:
+    """A config whose cert paths all land in tmp_path, so nothing touches the
+    repo's real certs/ directory."""
+    cfg_path = tmp_path / "model_conn.yaml"
+    cfg_path.write_text(
+        "receiver:\n"
+        "  endpoints: []\n"
+        "tls:\n"
+        f"  ca_cert: {tmp_path}/ca-cert.pem\n"
+        f"  ca_key: {tmp_path}/ca-key.pem\n"
+        f"  server_cert: {tmp_path}/server-cert.pem\n"
+        f"  server_key: {tmp_path}/server-key.pem\n"
+        f"  client_cert: {tmp_path}/client-cert.pem\n"
+        f"  client_key: {tmp_path}/client-key.pem\n"
+        f"  panel_cert: {tmp_path}/panel-cert.pem\n"
+        f"  panel_key: {tmp_path}/panel-key.pem\n",
+        encoding="utf-8",
+    )
+    return cfg_path
+
+
+def test_tls_panel_is_a_known_subcommand(monkeypatch, tmp_path):
+    import model_conn.__main__ as mm
+
+    calls = []
+    monkeypatch.setattr(mm, "_cmd_tls_panel", lambda cfg: calls.append(cfg) or 0)
+
+    rc = main(["--tls", "panel", "--config", str(_tls_config(tmp_path))])
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_tls_panel_without_a_ca_says_it_needs_the_key(tmp_path, capsys):
+    """The failure to be helpful about: copying only ca-cert.pem to the Pi and
+    not ca-key.pem looks like everything is in place, but signing needs the
+    key."""
+    pytest.importorskip("cryptography")
+
+    rc = main(["--tls", "panel", "--config", str(_tls_config(tmp_path))])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "neo --tls init" in err
+    assert "key" in err
+
+
+def test_tls_panel_issues_a_cert_after_init(tmp_path, capsys):
+    pytest.importorskip("cryptography")
+    cfg_path = _tls_config(tmp_path)
+
+    assert main(["--tls", "init", "--config", str(cfg_path)]) == 0
+    capsys.readouterr()
+
+    assert main(["--tls", "panel", "--config", str(cfg_path)]) == 0
+    assert (tmp_path / "panel-cert.pem").exists()
+    assert (tmp_path / "panel-key.pem").exists()
+
+    out = capsys.readouterr().out
+    # It has to tell you the two things that are not discoverable from the
+    # filesystem: where to point the panel, and that the CA still needs
+    # installing on the browsing device.
+    assert "webapp.local.yaml" in out
+    assert "docs/security.md" in out

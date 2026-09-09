@@ -1,0 +1,34 @@
+# dev -- no robot attached.
+#
+# Every stream comes from the browser, so the whole stack runs on a laptop with
+# no Pi, no camera, no mic and no servos. This is the profile the admin panel
+# was built against and the one most development happens in.
+
+profile: dev
+description: All sources from the browser; no hardware, no servos.
+
+sources:
+  camera: webapp
+  mic: webapp
+  speaker: webapp
+
+nodes:
+  source_manager: true
+
+  camera_hw: false
+  mic_hw: false
+  speaker_hw: false
+
+  # No servos attached, and nothing to protect: head_behavior still runs so the
+  # arbiter and the joystick deadman are exercised, but servo_driver does not.
+  servo_driver: false
+  head_behavior: true
+
+  perception: true
+  wake_word: true
+  asr_router: true
+  tts: true
+  link: true
+  kb: true
+  dialog: true
+  emotion: true

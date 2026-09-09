@@ -4,18 +4,55 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Four packages under `src/` are implemented and tested (~313 tests): `neo_webapp`
+Six packages under `src/` (377 tests). Four are pure Python: `neo_webapp`
 (admin panel), `neo_perception` (detection/gestures/engagement), `model_conn`
 (the `neo` CLI and off-board link), and `intelligence` (prompts, chat, ASR/TTS).
-[README.md](README.md) tracks what each one currently does.
+Two are ROS: `neo_msgs` (the frozen interface contracts) and `neo_bringup`
+(launch profiles). [README.md](README.md) tracks what each one currently does.
 
 Not built: motion (the servo driver), the wake word, the vectorless campus-data
-engine, and the emotion layer. Everything below describes the design those must
-follow, including the parts not yet written.
+engine, and the emotion layer. The ROS *nodes* wrapping the Python cores are
+also not built — `nodes/*.py` in each package documents its wiring and raises
+`NotImplementedError`. Everything below describes the design those must follow,
+including the parts not yet written.
 
-Install is `pip install -e ".[dev,detector]"` from the repo root — one `setup.py`
-covers all four packages. Tests run **per package**, from inside its own
-directory; the four `tests/conftest.py` files collide otherwise.
+### Two install paths, both needed
+
+They are split on purpose, and neither is going away:
+
+```bash
+pip install -e ".[dev,detector]"    # the four Python packages; one root setup.py
+colcon build --symlink-install      # neo_msgs + neo_bringup only
+```
+
+The four Python packages carry a `COLCON_IGNORE`: they declare
+`build_type: ament_python` but deliberately have no per-package `setup.py`, so
+colcon would fail on them and take `neo_msgs` down with it. That is enough to
+run nodes — rclpy finds `neo_msgs` from the sourced overlay and the packages
+from the Python path — but *not* enough for `ros2 run` to discover their
+executables. The phase that first needs `ros2 run` for a package removes its
+`COLCON_IGNORE` and adds a `setup.py`; not before.
+
+### Testing
+
+Tests run **per package, from inside its own directory** — the four
+`tests/conftest.py` files collide otherwise:
+
+```bash
+(cd src/neo_perception && pytest -q)
+(cd src/model-conn && pytest -q tests/test_link.py::test_probe_ordered_falls_through_to_wifi)
+colcon test --packages-select neo_msgs && colcon test-result --verbose
+```
+
+`neo_msgs` and `neo_bringup` are testable both ways: their tests parse the
+`.msg`/`.srv` and profile YAML as text, so they need no ROS install and run in
+the pip-only CI job too. `neo_msgs/test/test_contract.py` is the guard against
+the frozen contracts drifting from the Python mirror dataclasses in
+`neo_webapp.bridge.types` and `neo_perception.types` — nothing else in the repo
+would notice if they diverged.
+
+Security setup (the private CA, the three certificates, installing the CA on a
+phone) is in [docs/security.md](docs/security.md).
 
 The build order, per-phase acceptance criteria, and the reasoning behind the
 phase ordering live in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).

@@ -106,3 +106,135 @@ def test_leaf_certs_chain_via_openssl_semantics(tmp_path: Path):
     ca_ski = ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
     leaf_aki = leaf.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
     assert leaf_aki.key_identifier == ca_ski.key_identifier
+
+
+# --------------------------------------------------------------------------
+# Admin panel certificate (plan Phase 1, step 3)
+# --------------------------------------------------------------------------
+
+
+def test_panel_cert_is_signed_by_the_same_ca(tmp_path: Path):
+    """The whole reason the panel cert comes from here rather than from
+    neo_webapp's self-signed devcert script: one CA installed on your phone has
+    to cover both the panel and the link, or one of the two installs gets
+    skipped and you go back to clicking through warnings."""
+    from cryptography import x509
+
+    ca_cert, ca_key = _make_ca(tmp_path)
+    cert_path, key_path = tmp_path / "panel-cert.pem", tmp_path / "panel-key.pem"
+
+    certs.generate_panel_cert(
+        ca_cert_path=ca_cert,
+        ca_key_path=ca_key,
+        cert_path=cert_path,
+        key_path=key_path,
+        dns_names=["neo.local"],
+        ip_addresses=["192.168.50.2"],
+    )
+
+    ca = x509.load_pem_x509_certificate(ca_cert.read_bytes())
+    panel = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    assert panel.issuer == ca.subject
+    assert key_path.exists()
+
+
+def test_panel_cert_is_a_server_cert_with_the_right_sans(tmp_path: Path):
+    from cryptography import x509
+    from cryptography.x509.oid import ExtendedKeyUsageOID
+
+    ca_cert, ca_key = _make_ca(tmp_path)
+    cert_path, key_path = tmp_path / "panel-cert.pem", tmp_path / "panel-key.pem"
+
+    certs.generate_panel_cert(
+        ca_cert_path=ca_cert,
+        ca_key_path=ca_key,
+        cert_path=cert_path,
+        key_path=key_path,
+        dns_names=["neo", "neo.local"],
+        ip_addresses=["192.168.50.2"],
+    )
+
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+
+    eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    assert ExtendedKeyUsageOID.SERVER_AUTH in eku
+
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert set(san.get_values_for_type(x509.DNSName)) == {"neo", "neo.local"}
+    assert [str(i) for i in san.get_values_for_type(x509.IPAddress)] == ["192.168.50.2"]
+
+
+def test_panel_cert_is_not_a_ca(tmp_path: Path):
+    """A leaf that could sign is a leaf that can impersonate anything, and this
+    one lives on the machine most exposed to the campus network."""
+    from cryptography import x509
+
+    ca_cert, ca_key = _make_ca(tmp_path)
+    cert_path, key_path = tmp_path / "panel-cert.pem", tmp_path / "panel-key.pem"
+    certs.generate_panel_cert(
+        ca_cert_path=ca_cert,
+        ca_key_path=ca_key,
+        cert_path=cert_path,
+        key_path=key_path,
+        dns_names=["neo.local"],
+        ip_addresses=[],
+    )
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+    assert bc.ca is False
+
+
+def test_panel_names_are_the_pi_not_the_laptop():
+    """`local_hostnames_and_ips` names the laptop (neo-brain); the panel runs on
+    the Pi (neo). Issuing the panel cert with the laptop's SANs fails much
+    later, as a phone refusing to connect."""
+    panel_names, _ = certs.panel_hostnames_and_ips()
+    host_names, _ = certs.local_hostnames_and_ips()
+
+    assert "neo.local" in panel_names
+    assert "neo-brain.local" not in panel_names
+    assert "neo-brain.local" in host_names
+
+
+def test_panel_cert_stays_inside_the_browser_lifetime_limit(tmp_path: Path):
+    """Apple platforms reject TLS server certificates valid for more than 398
+    days. The link's certs never meet a browser and keep the 10-year lifetime;
+    this one does, so it must not."""
+    from cryptography import x509
+
+    ca_cert, ca_key = _make_ca(tmp_path)
+    cert_path, key_path = tmp_path / "panel-cert.pem", tmp_path / "panel-key.pem"
+    certs.generate_panel_cert(
+        ca_cert_path=ca_cert,
+        ca_key_path=ca_key,
+        cert_path=cert_path,
+        key_path=key_path,
+        dns_names=["neo.local"],
+        ip_addresses=[],
+    )
+
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    lifetime = cert.not_valid_after_utc - cert.not_valid_before_utc
+    assert lifetime.days <= 398
+
+
+def test_link_certs_keep_the_long_lifetime(tmp_path: Path):
+    """The counterpart: no browser is involved in the Pi-to-laptop link, so
+    those certs are not subject to the limit and should not be shortened into a
+    yearly chore for no benefit."""
+    from cryptography import x509
+
+    ca_cert, ca_key = _make_ca(tmp_path)
+    cert_path, key_path = tmp_path / "server-cert.pem", tmp_path / "server-key.pem"
+    certs.generate_server_cert(
+        ca_cert_path=ca_cert,
+        ca_key_path=ca_key,
+        cert_path=cert_path,
+        key_path=key_path,
+        dns_names=["neo-brain.local"],
+        ip_addresses=[],
+    )
+
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    lifetime = cert.not_valid_after_utc - cert.not_valid_before_utc
+    assert lifetime.days > 398

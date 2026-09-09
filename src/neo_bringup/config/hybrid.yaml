@@ -1,0 +1,33 @@
+# hybrid -- hardware camera, browser mic.
+#
+# For debugging audio without shouting at the desk: perception runs on the real
+# camera in its real lighting, while questions are spoken into a phone. Also the
+# profile to use when the Pi's USB mic is the thing under suspicion, since it
+# takes it out of the path entirely without changing anything else.
+
+profile: hybrid
+description: Pi camera and servos; microphone and speaker from the browser.
+
+sources:
+  camera: hardware
+  mic: webapp
+  speaker: webapp
+
+nodes:
+  source_manager: true
+
+  camera_hw: true
+  mic_hw: false
+  speaker_hw: false
+
+  servo_driver: true
+  head_behavior: true
+
+  perception: true
+  wake_word: true
+  asr_router: true
+  tts: true
+  link: true
+  kb: true
+  dialog: true
+  emotion: true
