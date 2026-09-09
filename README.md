@@ -18,7 +18,7 @@ Six packages under `src/` are implemented and tested; the rest of the plan
 
 | Package | Implements | Status |
 |---|---|---|
-| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, and Dialog tabs live; Audio/Data/Emotion/Logs are stubs filled in by later phases |
+| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, Dialog, and Audio tabs live; Data/Emotion/Logs are stubs filled in by later phases |
 | [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification |
 | [`model_conn`](src/model-conn/README.md) | Phase 6 (partial) — the off-board LLM host/receiver link | CLI for serving the model (host) and checking the link (receiver); real mTLS via a private CA (`neo --tls init`) |
 | [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; streaming Vosk STT and Piper TTS wired through to the admin panel's Audio tab; RAG data folder and system prompt are placeholders |
@@ -30,12 +30,19 @@ All of them run with no Pi, no ROS, and no servos attached — `neo_webapp` via 
 the panel is using, `model_conn`/`intelligence` against whatever endpoints
 you point them at.
 
-377 tests. Run each package from inside its own directory
+440 tests. Run each package from inside its own directory
 (`cd src/neo_webapp && python -m pytest -q`) — the four `tests/conftest.py`
 files collide if you point pytest at `src/` as a whole. `neo_msgs` and
 `neo_bringup` are tested the same way with plain pytest: their tests read the
 `.msg`/`.srv` and profile YAML as text, so no ROS install is needed for them
 either.
+
+Nothing in the suite needs a Pi, a camera, a microphone, ROS, or a downloaded
+model — the heavy dependencies are all optional extras, and the tests that would
+need them skip with a reason rather than failing. CI
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs that same suite
+per package, a bug-level `ruff` pass, and a real `colcon build` on Jazzy, which
+is what validates the message contracts as IDL rather than as text.
 
 ### What the robot can currently do
 
@@ -184,11 +191,18 @@ placeholders.
 
 ## Not built yet
 
-Motion (servo driver), wake word, off-board Whisper (ASR upgrade when the
-link is healthy), the vectorless campus-data engine (RAG data folder exists,
-retrieval logic doesn't), and the emotion layer — see the plan for ordering.
-The ROS nodes wrapping the existing Python cores are also unbuilt: `nodes/*.py`
-in each package documents its topics and raises `NotImplementedError`. The
-contracts they need now exist, so they are unblocked.
-Full-body locomotion is out of
-scope until asked for.
+- **Motion** — the servo driver and the head arbiter (plan Phase 3).
+- **The wake word** — which is also the gate speech is missing. Recognition
+  runs today whenever the panel's mic channel is open; `wake_word` is what will
+  own that window on the robot.
+- **Off-board Whisper**, the ASR accuracy upgrade for when the link is healthy.
+  Vosk is the only engine, which is the right default — it is the one that works
+  with the laptop closed.
+- **The vectorless campus-data engine** — the RAG data folder exists, the
+  retrieval logic does not (plan Phase 7).
+- **The emotion layer** (plan Phase 9).
+- **The ROS nodes** wrapping the existing Python cores. Each `nodes/*.py`
+  documents its topics and raises `NotImplementedError`; the contracts they were
+  waiting on now exist, so they are unblocked.
+
+Full-body locomotion is out of scope until asked for.

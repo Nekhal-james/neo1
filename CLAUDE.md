@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Six packages under `src/` (377 tests). Four are pure Python: `neo_webapp`
+Six packages under `src/` (440 tests). Four are pure Python: `neo_webapp`
 (admin panel), `neo_perception` (detection/gestures/engagement), `model_conn`
 (the `neo` CLI and off-board link), and `intelligence` (prompts, chat, ASR/TTS).
 Two are ROS: `neo_msgs` (the frozen interface contracts) and `neo_bringup`
