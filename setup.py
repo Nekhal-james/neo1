@@ -38,12 +38,18 @@ setup(
         "neo_perception.scripts",
         "intelligence",
         "intelligence.nodes",
+        "neo_motion",
+        "neo_motion.nodes",
+        "neo_emotion",
+        "neo_emotion.nodes",
     ],
     package_dir={
         "model_conn": "src/model-conn/model_conn",
         "neo_webapp": "src/neo_webapp/neo_webapp",
         "neo_perception": "src/neo_perception/neo_perception",
         "intelligence": "src/intelligence/intelligence",
+        "neo_motion": "src/neo_motion/neo_motion",
+        "neo_emotion": "src/neo_emotion/neo_emotion",
     },
     package_data={
         "neo_webapp": ["ui/*.html", "ui/*.css", "ui/*.js"],

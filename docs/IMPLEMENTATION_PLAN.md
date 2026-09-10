@@ -252,7 +252,7 @@ CI runs. Four deviations from the steps below, each deliberate:
   which is the single most common state this robot will be in. The panel still
   renders one badge, flattening back to the six labels for display.
 
-* **`colcon build` covers only these two packages.** The four Python packages
+* **`colcon build` covers only these two packages.** The six Python packages
   carry a `COLCON_IGNORE` — they have no per-package `setup.py` by design (one
   root `setup.py`, deliberately), so colcon would fail on them. See CLAUDE.md's
   Status section for what that does and does not buy.
@@ -366,7 +366,7 @@ Do not add multi-user accounts or roles.
 2. **`servo_driver` node.** Subscribes `/head/command`, publishes `/head/state` at 50 Hz. In order:
    - clamp to soft limits from config (never trust an upstream node),
    - slew-rate limit (max deg/s per axis) so a step command becomes a smooth move,
-   - deadband to stop buzzing on micro-corrections,
+   - deadband to stop buzzing on micro-corrections — but keep it small, because it also quantizes slow motion into steps of roughly its own size, and idle drift and distant tracking are both slow motion. Measured: a 2° idle sine renders as 58 jumps of 0.43° over 30 s at the 0.4° placeholder, versus 256 jumps of 0.12° at 0.1°. The PCA9685 resolves ~0.044°, so there is room to spend,
    - watchdog: no command for 500 ms means hold position, not fall limp,
    - `/system/estop` freezes output immediately; `/head/center` returns to neutral,
    - on clean shutdown, center then stop driving.
@@ -443,12 +443,13 @@ Do not add face recognition or identity. Do not chase fps with a bigger model.
 *Goal: "Neo" wakes the robot; speech becomes text **without the laptop**; text becomes speech.*
 *Estimate: 6–7 days (up from revision 1 — local ASR is now in scope).*
 
-### 5.0 Status: ASR and TTS landed; the gate has not
+### 5.0 Status: ASR, TTS and the spoken turn landed; the gate has not
 
-Speech-to-text and text-to-speech are implemented and wired end to end through
-the admin panel's Audio tab. What is **not** built is step 1-3 and 6 below — the
-wake word, VAD endpointing, and the barge-in guard — which is to say the gate
-itself. Read §5.1 as still entirely outstanding.
+Speech-to-text and text-to-speech are implemented, and joined on the admin
+panel's Audio tab into a spoken turn. Steps 5 and 6 below — sentence-streamed
+TTS and the half-duplex guard — are built there. What is **not** built is steps
+1-3 — the wake word and VAD endpointing — which is to say the gate itself, plus
+the off-board Whisper branch of step 4. Read §5.1 as still entirely outstanding.
 
 What exists:
 
@@ -465,6 +466,24 @@ What exists:
   and see the transcript; type and hear it back. `POST /api/audio/transcribe`
   accepts an uploaded WAV, so the ASR path is testable with no microphone at
   all, which is also how a recorded corridor clip gets replayed later.
+* **A spoken turn** (`neo_webapp/voice.py`): a final transcript goes through
+  `intelligence.chat.ask` and the reply is spoken, one turn at a time with no
+  queue, driving the dialog badge `LISTENING → THINKING → SPEAKING`. Answering
+  out loud is off until switched on.
+* **Step 5, sentence streaming.** The reply is synthesized and pushed a sentence
+  at a time. Speech is pushed with backpressure: it used to be dropped on a full
+  queue, which cut every reply off at 1.49 s.
+* **Step 6, the half-duplex guard.** Mic audio does not reach the recognizer
+  until Neo's voice has finished *playing* — tracked with the browser's own
+  playback cursor, not the server's push, which ends seconds earlier. Verified
+  live by feeding the reply back into the mic: one turn, where the same audio
+  transcribed ungated came back nearly word for word.
+* **Measured on the downloaded models** (`vosk-model-small-en-in-0.4`,
+  `en_US-lessac-medium`, on the dev laptop — re-measure on the Pi): Piper at
+  ~0.05 real-time factor once loaded, ~1.5 s to load the voice for the first
+  reply. The small Vosk model is serviceable for open questions but hears
+  "CS-204" as "p s two hundred for" — step 4's grammar constraint is not
+  optional for room codes.
 
 Two consequences worth being explicit about:
 

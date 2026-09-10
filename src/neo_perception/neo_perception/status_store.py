@@ -53,6 +53,7 @@ def write_status(
     identify_best: str = "",
     identify_error: str = "",
     identify_guesses: list[dict[str, Any]] | None = None,
+    palm: dict[str, Any] | None = None,
     path: Path | None = None,
 ) -> None:
     """Never raises: losing a status write must not take the writer down.
@@ -84,6 +85,9 @@ def write_status(
             "error": identify_error,
             "guesses": identify_guesses or [],
         },
+        # Why the nearest person is or is not reading as a palm. Written so a
+        # palm that will not register can be diagnosed from outside the panel.
+        "palm": palm,
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

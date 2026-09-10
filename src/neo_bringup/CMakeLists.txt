@@ -8,8 +8,7 @@ install(DIRECTORY launch config
 )
 
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
+  # No ament_lint_auto here either; see the note in neo_msgs/CMakeLists.txt.
 
   # Plain pytest over the YAML -- no ROS needed, so the same test also runs in
   # the pip-only CI job.

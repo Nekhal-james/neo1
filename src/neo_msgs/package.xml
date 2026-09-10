@@ -15,14 +15,15 @@
     every other package depends on, so a dependency added here is a dependency
     added everywhere. Interfaces that need sensor_msgs/vision_msgs types
     (/head/state, /joy, /perception/detections) use those packages' own
-    messages directly rather than wrapping them -- see section 1.2 of the plan.
+    messages directly rather than wrapping them; see section 1.2 of the plan.
   -->
   <depend>std_msgs</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
 
-  <test_depend>ament_lint_common</test_depend>
+  <!-- No ament_lint_common: its linters enforce a house style this repo
+       has decided against gating on. See CMakeLists.txt. -->
   <test_depend>python3-pytest</test_depend>
 
   <export>

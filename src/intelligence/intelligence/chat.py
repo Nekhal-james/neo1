@@ -36,24 +36,49 @@ DEGRADED_REPLY = (
 )
 
 ChatTransport = Callable[[str, int, str, str, float, str], str]
-"""(host, port, model, message, timeout_s, system) -> reply text. Raises on failure."""
+"""(host, port, model, message, timeout_s, system) -> reply text. Raises on failure.
+
+`timeout_s` is the *read* timeout only. How long to wait for the connection is a
+separate question with a different answer, and it is bound into the transport by
+`chat_transport_for` rather than passed here -- see below.
+"""
+
+DEFAULT_CONNECT_TIMEOUT_S = 2.0
+"""Fallback when no receiver probe timeout is configured."""
 
 
 def _chat_request(scheme: str, host: str, port: int, model: str, message: str,
-                   timeout_s: float, system: str, **request_kwargs) -> str:
+                   timeout_s: float, system: str, *,
+                   connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S,
+                   keep_alive: str | None = None,
+                   **request_kwargs) -> str:
     import requests
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": message},
+        ],
+        "stream": False,
+    }
+    if keep_alive is not None:
+        # Ollama drops a model from memory after five minutes by default, and
+        # reloading a 3B model costs ~45 s. Without this, the first question
+        # anyone asks after a quiet spell is guaranteed to time out and get the
+        # degraded reply -- on a reception desk, quiet spells are the norm, so
+        # that is close to *every* first question.
+        payload["keep_alive"] = keep_alive
 
     resp = requests.post(
         f"{scheme}://{host}:{port}/api/chat",
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": message},
-            ],
-            "stream": False,
-        },
-        timeout=timeout_s,
+        json=payload,
+        # Two timeouts, because one number cannot do both jobs. Connecting is
+        # how we detect a host that is gone, and must fail fast so the degraded
+        # reply is prompt. Reading is how long generation may take, and must be
+        # patient enough to survive a cold model load. A single value forces a
+        # choice between a laggy degrade and a spurious one.
+        timeout=(connect_timeout_s, timeout_s),
         **request_kwargs,
     )
     resp.raise_for_status()
@@ -65,18 +90,48 @@ def _http_chat(host: str, port: int, model: str, message: str, timeout_s: float,
     return _chat_request("http", host, port, model, message, timeout_s, system)
 
 
+def _keep_alive_for(mc_cfg: ModelConnConfig) -> str | None:
+    """`host.idle_unload_minutes` as an Ollama keep_alive string.
+
+    The knob existed in the config and in the plan but was never wired to
+    anything, so Ollama silently used its own five-minute default instead of the
+    thirty configured here.
+    """
+    minutes = getattr(mc_cfg.host, "idle_unload_minutes", 0)
+    return f"{int(minutes)}m" if minutes and minutes > 0 else None
+
+
 def chat_transport_for(mc_cfg: ModelConnConfig) -> ChatTransport:
     """Mirrors model_conn.link.transport_for: plain HTTP when tls.enabled is
-    False, HTTPS presenting the client cert when it's True."""
+    False, HTTPS presenting the client cert when it's True.
+
+    The connect timeout and keep-alive are bound here rather than threaded
+    through every call: both come from `mc_cfg`, and both already mean exactly
+    what is needed. `receiver.probe_timeout_s` is by definition "how long to
+    wait before calling a host unreachable", which is the connect timeout.
+    """
+    connect_timeout_s = (
+        getattr(mc_cfg.receiver, "probe_timeout_s", 0) or DEFAULT_CONNECT_TIMEOUT_S
+    )
+    keep_alive = _keep_alive_for(mc_cfg)
+
     if not mc_cfg.tls.enabled:
-        return _http_chat
+        def _plain(host: str, port: int, model: str, message: str,
+                   timeout_s: float, system: str) -> str:
+            return _chat_request("http", host, port, model, message, timeout_s, system,
+                                 connect_timeout_s=connect_timeout_s,
+                                 keep_alive=keep_alive)
+
+        return _plain
 
     from model_conn import tls
 
     kwargs = tls.client_request_kwargs(mc_cfg)
 
     def _https_chat(host: str, port: int, model: str, message: str, timeout_s: float, system: str) -> str:
-        return _chat_request("https", host, port, model, message, timeout_s, system, **kwargs)
+        return _chat_request("https", host, port, model, message, timeout_s, system,
+                             connect_timeout_s=connect_timeout_s,
+                             keep_alive=keep_alive, **kwargs)
 
     return _https_chat
 

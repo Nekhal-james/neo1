@@ -23,11 +23,16 @@ class TrackerConfig:
     iou_gate: float = 0.25
     """Minimum IoU to accept a match against the predicted box."""
 
-    center_gate_scale: float = 1.2
+    center_gate_scale: float = 1.8
     """Fallback match: centre distance below this multiple of the box diagonal.
 
     Catches the fast-motion case where prediction and detection no longer overlap
     at all, which happens easily at 3 fps.
+
+    Sized for **head** boxes, which are the default tracking target and roughly a
+    quarter the size of a person box. The gate is relative to the box diagonal,
+    so the same multiplier that comfortably covered a walking person when
+    tracking bodies leaves barely any room when tracking heads.
     """
 
     min_hits: int = 2
@@ -125,6 +130,7 @@ class MultiTracker:
             track.vy = 0.5 * track.vy + 0.5 * max(-cap, min(cap, vy))
 
         track.bbox = det.bbox
+        track.person_bbox = det.person_bbox
         track.score = det.score
         track.keypoints = det.keypoints
         track.stamp = stamp
@@ -141,6 +147,7 @@ class MultiTracker:
             stamp=stamp,
             score=det.score,
             keypoints=det.keypoints,
+            person_bbox=det.person_bbox,
             first_seen=stamp,
             last_seen=stamp,
             confirmed=self.cfg.min_hits <= 1,

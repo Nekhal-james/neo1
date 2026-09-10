@@ -131,13 +131,18 @@ class UltralyticsDetector(Detector):
                         for p in keypoint_rows[i]
                     )
                 )
+            bbox = BBox(*[float(v) for v in box])
             detections.append(
                 Detection(
-                    bbox=BBox(*[float(v) for v in box]),
+                    bbox=bbox,
                     score=float(score),
                     label=str(names.get(cls, cls)),
                     class_id=cls,
                     keypoints=keypoints,
+                    # Derived here, where the keypoints are, so every backend
+                    # produces it the same way and the pipeline never has to
+                    # recompute it per frame.
+                    head_bbox=keypoints.head_box(bbox) if keypoints else None,
                 )
             )
         return detections

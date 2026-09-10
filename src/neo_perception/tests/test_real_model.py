@@ -154,3 +154,69 @@ def _raise_wrist(detection: Detection) -> Detection:
         class_id=detection.class_id,
         keypoints=Keypoints(points=tuple(points)),
     )
+
+
+class TestRealHeadBoxes:
+    """Head boxes on real poses, where the degenerate cases actually appeared.
+
+    Synthetic skeletons are always facing forward with well-separated ears, so
+    they never produce the failure this guards: edge-on, the two ears land
+    almost on top of each other and their span silently becomes a couple of
+    pixels, yielding a 1x2 px "head" that matches nothing and destroys the
+    track.
+    """
+
+    def test_every_real_detection_yields_a_usable_head(self, real_detections):
+        for det in real_detections:
+            head = det.keypoints.head_box(det.bbox)
+            if head is None:
+                continue  # a legitimate answer; callers fall back themselves
+            assert head.width > 8.0 and head.height > 8.0, (
+                f"degenerate {head.width:.0f}x{head.height:.0f} head box"
+            )
+
+    def test_head_proportions_are_anatomical(self, real_detections):
+        """Not merely non-degenerate: the right fraction of the person."""
+        checked = 0
+        for det in real_detections:
+            head = det.keypoints.head_box(det.bbox)
+            if head is None or det.bbox.width <= 0:
+                continue
+            ratio = head.width / det.bbox.width
+            assert 0.10 < ratio < 0.90, f"head is {ratio:.2f} of the person box"
+            checked += 1
+        assert checked > 0, "expected at least one head on real data"
+
+    def test_the_head_sits_inside_the_upper_person_box(self, real_detections):
+        for det in real_detections:
+            head = det.keypoints.head_box(det.bbox)
+            if head is None:
+                continue
+            assert det.bbox.x1 - head.width <= head.cx <= det.bbox.x2 + head.width
+            assert head.cy < det.bbox.y1 + det.bbox.height * 0.6, (
+                "a head below the midline of the person means it latched onto a torso"
+            )
+
+    def test_the_pipeline_tracks_heads_not_bodies(self, real_detections):
+        """The invariant that matters: no person box may survive among heads.
+
+        Salience is largest-box-wins, so a single un-narrowed person box left in
+        the mix is several times the area of every head and would always win.
+        """
+        from neo_perception.detector import MockDetector, ScriptedFrame
+        from neo_perception.pipeline import MockFrame
+
+        pipeline = PerceptionPipeline(
+            PipelineConfig(track_head=True, tracker=TrackerConfig(min_hits=1)),
+            MockDetector([ScriptedFrame(list(real_detections))]),
+        )
+        frame = MockFrame(810, 1080)
+        result = pipeline.process(frame, 0.0)
+
+        assert result.tracks, "expected tracked heads"
+        for track in result.tracks:
+            if track.person_bbox is None:
+                continue
+            assert track.bbox.area < track.person_bbox.area * 0.5, (
+                "a full person box survived into the tracker"
+            )

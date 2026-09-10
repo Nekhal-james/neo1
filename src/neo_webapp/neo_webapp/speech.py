@@ -219,6 +219,16 @@ class SpeechLink:
         self._last = TranscriptView()
         self._last_error = ""
 
+    def discard_utterance(self) -> None:
+        """Drop the utterance in progress, but keep the last transcript on show.
+
+        Not `reset()`, which is the operator clearing the panel. This is for the
+        moment Neo stops talking: whatever the recognizer was half-holding from
+        around its own voice is not something anybody said to it.
+        """
+        self._session = None
+        self._partial = ""
+
     # -- text to speech ----------------------------------------------------
 
     async def say(self, text: str):
@@ -239,6 +249,32 @@ class SpeechLink:
         except Exception as exc:
             self._note_error("text-to-speech", exc)
             raise
+        finally:
+            self._speaking = False
+
+    async def say_sentences(self, text: str):
+        """Synthesize `text` a sentence at a time, yielding each as it is ready.
+
+        What `say()` does, split along sentence boundaries -- which is the whole
+        of plan 5.5. The first sentence can be playing while the second is
+        still being synthesized, so the silence before Neo starts talking is one
+        sentence long rather than the entire reply. Every chunk is already at
+        the speaker rate.
+        """
+        if not SPEECH_AVAILABLE:
+            raise RuntimeError("intelligence is not installed")
+
+        self._speaking = True
+        try:
+            for sentence in _tts.split_sentences(text):
+                try:
+                    audio = await asyncio.to_thread(
+                        _tts.synthesize_pcm, sentence, self._config(), self.speaker_rate
+                    )
+                except Exception as exc:
+                    self._note_error("text-to-speech", exc)
+                    raise
+                yield audio
         finally:
             self._speaking = False
 

@@ -138,42 +138,95 @@ async def ws_mic(websocket: WebSocket) -> None:
     await websocket.accept()
     bridge, media = _ctx(websocket)
     speech = websocket.app.state.speech
+    voice = getattr(websocket.app.state, "voice", None)
     await media.open("mic")
+    if voice is not None:
+        voice.publish()
     try:
         while True:
             chunk = await websocket.receive_bytes()
             await bridge.publish_mic_chunk(chunk)
+            # Half-duplex (plan 5.6): while Neo's own voice is playing, the room
+            # mic is hearing it. The meter above still gets the audio -- the mic
+            # is fine -- but the recognizer must not, or Neo transcribes its own
+            # reply and answers itself.
+            if voice is not None and voice.gated():
+                continue
             # Guarded here as well as inside SpeechLink. The claim above -- that
             # recognition never takes the microphone down -- has to hold for
             # whatever is plugged in as the recognizer, not only for the one
             # implementation that happens to catch its own errors.
             try:
-                await speech.feed(chunk)
+                transcript = await speech.feed(chunk)
             except Exception:  # noqa: BLE001
                 log.exception("speech-to-text failed on a mic chunk")
+                continue
+            if voice is not None:
+                voice.on_transcript(transcript)
     except WebSocketDisconnect:
         pass
     finally:
         # Flush before closing: without this the trailing audio -- often the
         # last word -- is dropped whenever someone stops the mic instead of
-        # pausing long enough for the recognizer to endpoint on its own.
+        # pausing long enough for the recognizer to endpoint on its own. And
+        # answered: stopping the mic straight after asking is the common case.
+        transcript = None
         with contextlib.suppress(Exception):
-            await speech.flush()
+            transcript = await speech.flush()
         await media.close("mic")
+        if voice is not None:
+            with contextlib.suppress(Exception):
+                voice.on_transcript(transcript)
+            voice.publish()
 
 
 @router.websocket("/ws/speaker")
 async def ws_speaker(websocket: WebSocket) -> None:
-    """/audio/webapp/out -> browser playback."""
+    """/audio/webapp/out -> browser playback.
+
+    The one channel that only ever sends, which is exactly why it has to watch
+    for its browser leaving. Every other channel blocks in a receive call and
+    hears the disconnect immediately. This one blocks on the audio queue, and
+    with nothing being said it would never find out: the channel stayed
+    "connected" to nobody -- so the voice loop believed someone was listening --
+    and uvicorn's graceful shutdown waited on this handler forever.
+
+    So two tasks, and whichever finishes first ends the channel: one pumps audio
+    out, the other waits for the disconnect.
+    """
     if await require_ws_session(websocket) is None:
         return
     await websocket.accept()
     bridge, media = _ctx(websocket)
     await media.open("speaker")
-    try:
+
+    async def pump() -> None:
         async for chunk in bridge.audio_out_stream():
             await websocket.send_bytes(chunk)
-    except WebSocketDisconnect:
-        pass
+
+    async def until_closed() -> None:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                return
+
+    tasks = [
+        asyncio.create_task(pump(), name="speaker-pump"),
+        asyncio.create_task(until_closed(), name="speaker-watch"),
+    ]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            exc = task.exception()
+            if exc is not None and not isinstance(exc, WebSocketDisconnect):
+                log.info("speaker channel ended: %s", exc)
     finally:
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         await media.close("speaker")
+        if not media.active("speaker"):
+            # Whatever is still queued was for the listener who just left.
+            bridge.clear_audio_out()

@@ -4,30 +4,58 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Six packages under `src/` (440 tests). Four are pure Python: `neo_webapp`
-(admin panel), `neo_perception` (detection/gestures/engagement), `model_conn`
-(the `neo` CLI and off-board link), and `intelligence` (prompts, chat, ASR/TTS).
-Two are ROS: `neo_msgs` (the frozen interface contracts) and `neo_bringup`
-(launch profiles). [README.md](README.md) tracks what each one currently does.
+Eight packages under `src/` (641 tests). Six are pure Python: `neo_webapp`
+(admin panel), `neo_perception` (detection/gestures/engagement), `neo_motion`
+(head arbiter and servo driver), `neo_emotion` (mood and the motion it shapes),
+`model_conn` (the `neo` CLI and off-board link), and `intelligence` (prompts,
+chat, ASR/TTS). Two are ROS: `neo_msgs` (the frozen interface contracts) and
+`neo_bringup` (launch profiles). [README.md](README.md) tracks what each one
+currently does.
 
-Not built: motion (the servo driver), the wake word, the vectorless campus-data
-engine, and the emotion layer. Speech-to-text and text-to-speech *are* built and
-wired to the panel's Audio tab, but nothing gates them yet — the wake word is
-what will, and until then an open mic channel is the listening window. The ROS *nodes* wrapping the Python cores are
-also not built — `nodes/*.py` in each package documents its wiring and raises
+Not built: the wake word and the vectorless campus-data engine. Speech-to-text
+and text-to-speech *are* built, and joined on the panel's Audio tab into a spoken
+turn (transcript → `chat.ask` → sentence-streamed reply, in `neo_webapp/voice.py`),
+but nothing gates recognition yet — the wake word is what will, and until then an
+open mic channel is the listening window. Answering out loud is a separate switch,
+off by default, because with it on the room's speech goes to the model host. The ROS *nodes* wrapping the Python cores are also not
+built — `nodes/*.py` in each package documents its wiring and raises
 `NotImplementedError`. Everything below describes the design those must follow,
 including the parts not yet written.
+
+**The admin panel runs the real motion and emotion code**, not a stand-in: its
+`MockBridge` drives `neo_motion`'s arbiter and driver and `neo_emotion`'s
+controller, against a mock servo backend instead of a PCA9685. The simulated
+part is exactly one thing — the backend that would write pulse widths to I2C —
+so a bug found on the Head tab is a bug in the code that will drive the servos.
+That also makes `neo_webapp` depend on both packages at import time; the repo
+must be pip-installed (or they must be on `PYTHONPATH`) or the panel will not
+start.
+
+One deliberate difference from the robot: **in the panel, gaze is a bearing, not
+a rate.** On the robot the camera rides the head, so rate control on image error
+closes its own loop. The panel's camera is a webcam that does not move with the
+simulated head, so that error never shrinks — integrated as a rate, it ran the
+head to its 90° stop in five seconds on real frames and left it there. The panel
+turns the head to face the person's bearing instead, follows only an *engaged*
+person, and ignores perception results older than a second.
 
 ### Two install paths, both needed
 
 They are split on purpose, and neither is going away:
 
 ```bash
-pip install -e ".[dev,detector]"    # the four Python packages; one root setup.py
-colcon build --symlink-install      # neo_msgs + neo_bringup only
+pip install -e ".[dev,detector]"              # the six Python packages; one root setup.py
+colcon build --base-paths src --symlink-install   # neo_msgs + neo_bringup only
 ```
 
-The four Python packages carry a `COLCON_IGNORE`: they declare
+**`--base-paths src` is required, not optional.** The root `setup.py` makes
+colcon identify the repo root as a single Python package, so a bare
+`colcon build` never descends into `src/`: it finds neither ROS package,
+prints "0 packages finished", and exits 0. A green build that built nothing is
+the failure mode to watch for here, because the colcon job is the only thing
+that validates the message contracts as real IDL rather than as text.
+
+The six Python packages carry a `COLCON_IGNORE`: they declare
 `build_type: ament_python` but deliberately have no per-package `setup.py`, so
 colcon would fail on them and take `neo_msgs` down with it. That is enough to
 run nodes — rclpy finds `neo_msgs` from the sourced overlay and the packages
@@ -35,9 +63,30 @@ from the Python path — but *not* enough for `ros2 run` to discover their
 executables. The phase that first needs `ros2 run` for a package removes its
 `COLCON_IGNORE` and adds a `setup.py`; not before.
 
+**Do not activate a pip venv and source ROS in the same shell to run tests.**
+ROS Jazzy ships `launch_testing`, a pytest plugin built against pytest 7's hook
+signatures, while the `[dev]` extra installs pytest 9. With both on the path,
+*every* pytest invocation dies in plugin validation — including the ones colcon
+drives, which turns `colcon test` into errors that look like test failures and
+say nothing about the cause. Disabling the plugin does not help; a second ROS
+plugin then fails on its missing hook.
+
+Keep them apart, which costs nothing because neither side needs the other:
+
+```bash
+# pytest: venv only. No suite in this repo needs ROS, by design.
+source ~/neo-venv/bin/activate && (cd src/neo_webapp && pytest -q)
+
+# colcon: ROS only. Its system pytest 7 matches launch_testing.
+source /opt/ros/jazzy/setup.bash && colcon build --base-paths src
+```
+
+CI does not hit this: the colcon job runs in a bare `ros:jazzy-ros-base`
+container with no pip install, so only the system pytest is present.
+
 ### Testing
 
-Tests run **per package, from inside its own directory** — the four
+Tests run **per package, from inside its own directory** — the per-package
 `tests/conftest.py` files collide otherwise:
 
 ```bash
@@ -77,11 +126,14 @@ It is head-only for now (pan/tilt), wake-word gated, and has a web app that is b
 - **Vectorless RAG** for the college classroom data. No embedding store/vector DB: retrieval is over the structured classroom/location dataset directly (lookup/filter/prompt-stuffing). Do not introduce a vector database to "fix" retrieval without discussing it.
 - **Campus data arrives incrementally** and is edited through the admin panel, not in code. The system must be correct at ten rooms and at five hundred: retrieval is coverage-aware, distinguishing "that room isn't in my directory" from "I haven't learned that block yet", and never inventing a room.
 - **YOLO detection** for person and object, running on the Pi camera feed. This drives both presence ("someone approached the desk") and the head's gaze target. The continuous pass is a **pose** model (`yolov8n-pose`), not a plain detector: one inference gives person boxes, the COCO-17 keypoints that gestures are derived from, and a face-anchored gaze target. A second network for hands would roughly double per-frame cost on a Pi that only has ~4 fps to spend. Object detection is a separate model and runs **on demand**, not continuously.
-- **Gaze engagement is a lock, not a follow.** Presence alone does not move the head; a person who shows a palm (hand up, forearm vertical) and holds it does. The lock survives dropped frames and occlusion, and releases itself on three distinct signals with three different timings — walked out of frame (short grace), the detector blinked (long grace), and turned their back (medium). Collapsing those into one timeout makes the robot either stare at doorways or drop its lock every missed frame. Facing is derived from keypoints (COCO labels sides from the person's own frame, so shoulder parity inverts when they turn around) — no extra model. Only static gestures are reliable at Pi frame rates; a wave aliases at 4 fps. COCO-17 has no finger keypoints, so "palm" is a pose, not a hand shape.
+- **Track the head, not the whole person.** People stand close at a reception desk, so the person box is usually clipped by the frame and its centre sits on a torso filling the view; the head stays whole and is what a pan/tilt assembly aims at. The head box is derived from the COCO-17 nose/eyes/ears that the pose pass already produced, so it costs **no extra inference** — measured close up, face keypoints stay 4-5 of 5 visible while body keypoints fall to 2 of 8, and detection confidence actually *rises* (0.85 → 0.93). Every tracked box must be a head, including the fallbacks: salience is "largest box wins", so a single person box left among head boxes is several times their area and would always win. Head boxes are ~4× smaller, so the tracker's motion gate is scaled for them (`center_gate_scale`), not for bodies. `track_head=False` restores person tracking for a wide shot.
+- **Gaze engagement is a lock, not a follow.** Presence alone does not move the head; a person who shows a palm (hand up, forearm vertical) and holds it does. The lock survives dropped frames and occlusion, and releases itself on three distinct signals with three different timings — walked out of frame (short grace), the detector blinked (long grace), and turned their back (medium). Collapsing those into one timeout makes the robot either stare at doorways or drop its lock every missed frame. Facing is derived from keypoints (COCO labels sides from the person's own frame, so shoulder parity inverts when they turn around) — no extra model. Only static gestures are reliable at Pi frame rates; a wave aliases at 4 fps. COCO-17 has no finger keypoints, so "palm" is a pose, not a hand shape. When a palm will not register, `GestureRecognizer.explain` names which link of the test broke (shown on the Vision tab, written to the vision status file). It mirrors `_classify` step for step and a fuzz test fails if they ever disagree, so change the two together.
 - **Object identification is request-driven.** "What is this?" runs a second model once, on one frame, and ranks by `centrality² × √area` so the answer is the thing being held up rather than the largest thing in shot. Never run it continuously — it roughly doubles per-frame cost.
 - **Motion:** two servos, X (pan) and Y (tilt), moving the head/camera, driven over I2C via a PCA9685 (not Pi GPIO PWM) from a separate 5V supply. Two control paths feed the same servo node — the emotion system and a manual joystick. The joystick is **virtual, in the web app**, so it is network-mediated: it needs a staleness deadman, and a dropped connection must stop the head rather than leave it driving.
 - **Emotion layer:** an emotional state modulates head movement (idle motion, gaze, gesture style). It is a movement modifier, not a separate actuator path.
 - **Wake word "NEO":** Neo is silent and non-responsive until the wake phrase fires. Any audio/dialogue work must respect this gate — the wake-word detector is upstream of ASR and the LLM, not a filter applied afterwards.
+- **Spoken turns are half-duplex.** While Neo's voice is playing, mic audio still reaches the meter but not the recognizer, or it transcribes its own reply and answers itself — measured live, Vosk hears the reply near-perfectly if ungated. The gate must model *browser playback*, a cursor advanced the way `app.js` advances its own, not the server's push: synthesis runs ~20× real time, so pushing ends seconds before listening does. One turn at a time and no queue — a transcript arriving mid-turn is dropped.
+- **Speech reaches the speaker with backpressure.** Use `Bridge.push_audio_out`, never `emit_audio_out`, for anything longer than a tone: the latter drops on a full 32-chunk queue and, called in a loop that never yields, cut every reply off at exactly 1.49 s with a 200 response. Nothing is queued when no speaker is connected, and the queue is cleared when the last one leaves — otherwise the next listener hears a stale fragment of an old sentence. And the speaker handler must watch for its browser leaving: it only sends, so blocked on an empty queue it never sees a disconnect — it held a phantom "connected" channel the voice loop kept talking to, and uvicorn's graceful shutdown waited on it forever. TestClient hides this, because it cancels the handler when the socket context exits; `test_speaker_disconnect.py` drives the handler with a fake socket for that reason.
 
 ## Source selection (important cross-cutting concern)
 
@@ -93,6 +145,31 @@ Camera, microphone, and speaker each have two possible backends:
 This choice must be runtime-configurable per stream, not a build-time flag or a fork of the node. Node logic downstream of a source must not care which backend is active.
 
 Note that browsers only grant camera and microphone access in a secure context, so the admin panel **must** be served over HTTPS for the webapp backends to work from any device other than the Pi itself. This makes TLS a functional requirement, not just a hardening step.
+
+## Config: two layers, merged
+
+Every package reads `config/<name>.yaml` (committed defaults, no secrets) with
+`config/<name>.local.yaml` (gitignored, per-machine) **merged over it**, key by
+key and into nested sections. A local file naming one key must leave every other
+committed value standing.
+
+This is worth stating because it was wrong for a long time and the breakage was
+invisible: the local file *replaced* the committed one, so a `webapp.local.yaml`
+holding just the password hash switched off all of `webapp.yaml`, which then
+fell back to dataclass defaults. Those defaults mostly agree with the shipped
+YAML, so nothing looked wrong until one of them did not — and then the committed
+file that plainly said otherwise turned out to be inert.
+
+Two rules follow. **An explicit `--config` path, or the `$NEO_*_CONFIG` env var,
+names exactly one file** and nothing is layered over it. And **the loader must
+not restate a dataclass default** — `chat.timeout_s` drifted to 8.0 in the
+loader while the dataclass said 60.0, and the loader won.
+
+**Relative paths in config resolve against the repo root, never the working
+directory** (`intelligence.config.resolve_path`). The same file is read by the
+panel in WSL and `neo --prompt` on Windows, each launched from anywhere; model
+paths used to be CWD-relative and reported "not found" from everywhere but the
+repo root.
 
 ## Cross-process state: the `var/` status files
 

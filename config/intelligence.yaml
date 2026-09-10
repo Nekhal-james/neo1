@@ -5,18 +5,22 @@
 
 chat:
   model_name: ""      # must match what `neo --model ... up` registered in Ollama
-  timeout_s: 8.0
+  # Read timeout only: how long to wait for a reply once the host has answered.
+  # Must survive a cold model load (~45 s for a 3B), or the first question after
+  # any idle period gets the degraded reply. Deciding the host is *absent* is a
+  # different timeout -- model_conn's receiver.probe_timeout_s -- and stays ~1 s.
+  timeout_s: 60.0
 
 asr:
   # vosk is the only engine implemented -- always local, no off-board dependency.
   # Off-board Whisper (an accuracy upgrade when the link is healthy) is Phase 6 scope.
   engine: vosk
-  vosk_model_path: ""  # e.g. models/vosk-model-small-en-in-0.4
+  vosk_model_path: ""  # e.g. models/vosk-model-small-en-in-0.4 (relative to the repo root)
   sample_rate: 16000
 
 tts:
   engine: piper
-  piper_model_path: ""   # e.g. models/en_US-lessac-medium.onnx
+  piper_model_path: ""   # e.g. models/en_US-lessac-medium.onnx (relative to the repo root)
   piper_config_path: ""  # optional; piper can often infer this from the model path
 
 prompts:

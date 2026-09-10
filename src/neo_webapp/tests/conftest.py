@@ -27,8 +27,10 @@ def config() -> Config:
 
 @pytest.fixture
 def bridge() -> MockBridge:
-    # Short deadman keeps the timing tests quick.
-    return MockBridge(deadman_ms=120, source_switch_ms=10)
+    # Short deadman keeps the timing tests quick. Idle drift is off so that
+    # "the head did not move" can be asserted as an exact pose; the tests that
+    # care about idle motion build their own bridge.
+    return MockBridge(deadman_ms=120, source_switch_ms=10, idle_motion=False)
 
 
 @pytest.fixture

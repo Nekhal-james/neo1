@@ -48,6 +48,7 @@ class FakeSpeech:
         self.said: list[str] = []
         self.fed: list[bytes] = []
         self.flushed = 0
+        self.discards = 0
         self.resets = 0
         self.reloads = 0
         self.refreshes = 0
@@ -88,6 +89,15 @@ class FakeSpeech:
             raise self.say_error
         self.said.append(text)
         return FakeAudio(b"\x00\x01" * (self.pcm_bytes // 2), 22050)
+
+    async def say_sentences(self, text):
+        if self.say_error:
+            raise self.say_error
+        self.said.append(text)
+        yield FakeAudio(b"\x00\x01" * (self.pcm_bytes // 2), 22050)
+
+    def discard_utterance(self):
+        self.discards += 1
 
     def reset(self):
         self.resets += 1
@@ -188,14 +198,24 @@ def test_say_synthesizes_and_reports_the_audio(speech_client):
 
 def test_say_pushes_pcm_to_the_speaker_channel(speech_client):
     """The end of the path that matters: synthesized audio has to reach the
-    channel the browser is playing, not just be returned to the caller."""
+    browser playing the speaker channel, not just be returned to the caller."""
     client, _ = speech_client(pcm_bytes=4096)
-    app = client.app
-    client.post("/api/audio/say", json={"text": "hello"})
+    with client.websocket_connect("/ws/speaker") as ws:
+        client.post("/api/audio/say", json={"text": "hello"})
+        # 4096 bytes at 2048 per chunk.
+        assert ws.receive_bytes() == b"\x00\x01" * 1024
+        assert ws.receive_bytes() == b"\x00\x01" * 1024
 
-    queue = app.state.bridge._audio_out
-    assert queue.qsize() == 2  # 4096 bytes at 2048 per chunk
-    assert queue.get_nowait() == b"\x00\x01" * 1024
+
+def test_say_queues_nothing_when_no_speaker_is_connected(speech_client):
+    """This used to queue the audio regardless, and whoever connected the
+    speaker next -- a second or an hour later -- heard a fragment of the old
+    sentence. Measured: 0.19 s of it, one second after it was spoken."""
+    client, _ = speech_client(pcm_bytes=4096)
+    body = client.post("/api/audio/say", json={"text": "hello"}).json()
+    assert body["speaker_connected"] is False
+    assert body["bytes"] == 4096, "still synthesized, so a broken voice still shows"
+    assert client.app.state.bridge._audio_out.qsize() == 0
 
 
 def test_say_tells_you_when_nobody_is_listening(speech_client):
@@ -486,3 +506,30 @@ def test_a_voice_at_the_wrong_rate_is_resampled_not_pitch_shifted(
     # One second in, one second out -- at the speaker's rate, not the voice's.
     assert body["bytes"] == pytest.approx(22050 * 2, rel=0.01)
     assert body["duration_s"] == pytest.approx(1.0, rel=0.01)
+
+
+def test_a_long_reply_reaches_the_browser_in_full(config, tmp_path, piper_voice):
+    """The regression this exists for: spoken replies were cut off at 1.49 s.
+
+    The say route pushed chunks with put_nowait into a 32-slot queue without
+    ever yielding, so the queue filled in one pass and everything past the first
+    32 x 2048 bytes was dropped -- silently, with a 200 and the full duration in
+    the response. Three sentences of two seconds each is six seconds of speech,
+    four times what used to survive.
+    """
+    piper_voice(rate=22050, frames=22050 * 2)
+    client = _real_speech_client(config, tmp_path)
+    text = "The library is in the east wing. Take the stairs. It is on your left."
+
+    try:
+        with client.websocket_connect("/ws/speaker") as ws:
+            body = client.post("/api/audio/say", json={"text": text}).json()
+            received = b""
+            while len(received) < body["bytes"]:
+                received += ws.receive_bytes()
+    finally:
+        client.__exit__(None, None, None)
+
+    assert body["sentences"] == 3, "synthesized a sentence at a time"
+    assert body["bytes"] == 3 * 22050 * 2 * 2
+    assert len(received) == body["bytes"], "every sample of every sentence delivered"

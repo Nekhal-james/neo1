@@ -38,8 +38,76 @@ than continuous, and its cost is paid only when something asks.
 
 > **Frame-rate reality.** A *static* pose held over several frames is reliable at
 > 3–5 fps. A *dynamic* one is not: a 2 Hz wave sampled at 4 fps aliases badly.
-> `WAVE` is implemented and works when the pipeline is fast enough, but
-> `RAISED_HAND` is the default engage gesture because it survives the Pi.
+> `WAVE` is implemented and works when the pipeline is fast enough, but the
+> default engage gesture is a static pose because it survives the Pi:
+> `OPEN_PALM`, a raised hand with a vertical forearm.
+
+## When a palm will not register
+
+The palm test is a chain — both shoulders visible for scale, a wrist above its
+shoulder, that arm's elbow visible, the forearm pointing up, long enough to judge,
+and within 40° of vertical — and the lock needs it unbroken for 0.6 s. At a real
+desk it breaks on different links for different people, and from outside they
+all look the same: nothing happens.
+
+`GestureRecognizer.explain(track, stamp)` names the link that broke and by how
+much, for whoever matters most on the frame: the person part-way through a hold,
+else the locked target, else the nearest person. The pipeline puts it on every
+result as `palm_check`, with `hold_progress` beside it; the panel shows both on
+the Vision tab and writes them to `var/perception/status.json`. It mirrors
+`_classify` step for step, and a 500-case fuzz test fails if the two ever
+disagree, so change them together.
+
+A single frame that is not a palm restarts the hold. That is deliberate — it is
+what rejects keypoint noise, such as a person clipped at the frame edge whose
+wrist, elbow and shoulder pile up within a few pixels and read as a palm for one
+frame (measured: 1 frame in 47 on bus.jpg) — but it is also the first thing to
+check if a real palm keeps failing: the hold bar will keep falling back to zero.
+
+Measured on a laptop webcam, the link people actually break is the elbow. Close
+to the screen, a raised hand read as `raised_hand` with the elbow at 0.21–0.33
+confidence against the 0.35 cutoff: the model does not extrapolate an elbow that
+is below the frame (checked on real people too — 0.01–0.32 whenever the crop
+ended above mid-upper-arm). Sitting back until it was in shot, the same palm
+scored 0.35 at a 21° tilt and locked. That elbow sat exactly on the threshold,
+so if palms lock only intermittently at a real desk, the elbow's confidence
+cutoff is the first thing to measure — not the tilt limit.
+
+## The head is what gets tracked
+
+People stand close at a reception desk. The *person* box is then clipped by the
+frame and its centre lands on a torso filling the view — useless as an aim point
+for a pan/tilt head. So the tracked box is the **head**, derived from the
+nose/eyes/ears the pose pass already produced. No second model, no extra
+inference.
+
+Measured on real frames at four framings, from full-scene down to head-only:
+
+| Framing | Detection score | Face keypoints | Body keypoints |
+|---|---|---|---|
+| full frame | 0.85 | 5/5 | 8/8 |
+| person fills frame | 0.92 | 5/5 | 8/8 |
+| head + shoulders | 0.92 | 4/5 | 5/8 |
+| head only | 0.93 | 4/5 | **2/8** |
+
+Detection gets *better* close up. What degrades is the body, which is exactly
+what we stopped depending on.
+
+Head width comes from the widest reliable span available — ear-to-ear, else
+eye-to-eye (~0.31 of head width), else shoulders (~0.45 of their span), else the
+person box. Each is checked for plausibility against a scale reference rather
+than merely for being positive, because the degenerate cases are the common
+ones: turned away, the two ear keypoints converge and their span becomes a
+couple of pixels, which yielded a 1×2 px "head" that matched nothing and
+silently destroyed the track. The *reference* is validated too — a collapsed
+3 px shoulder span once rejected every other candidate as "too wide" and
+returned no head at all.
+
+> **Limitation worth knowing.** The engage gesture needs shoulder, elbow and
+> wrist. At head-only framing those are gone (2/8 keypoints), so a palm cannot
+> be seen and nobody can engage. If the camera is framed that tightly, either
+> widen it to include the upper body or engagement needs a different trigger at
+> close range.
 
 ## Palm, not just "hand up"
 

@@ -252,6 +252,24 @@ class EngagementController:
                 else "lost from view"
             )
 
+    def hold_progress(self, stamp: float) -> float:
+        """How far through the palm hold the current candidate is: 0 to 1.
+
+        So the panel can show a lock building rather than a state that flips
+        after an unexplained delay -- and so a hold that keeps restarting on a
+        dropped frame shows up as a bar that keeps falling back to zero.
+        """
+        if self.state in (EngagementState.ENGAGED, EngagementState.SUSPENDED):
+            return 1.0
+        if self._candidate_id is None or self.cfg.confirm_s <= 0.0:
+            return 0.0
+        return max(0.0, min(1.0, (stamp - self._candidate_since) / self.cfg.confirm_s))
+
+    @property
+    def candidate_id(self) -> int | None:
+        """The person currently holding a palm towards a lock, if anyone."""
+        return self._candidate_id
+
     # -- external control --------------------------------------------------
 
     def release(self, reason: str = "released") -> None:

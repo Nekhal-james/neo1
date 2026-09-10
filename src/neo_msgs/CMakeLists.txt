@@ -32,8 +32,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
+  # Deliberately no ament_lint_auto. It pulls in ament_lint_common, whose
+  # linters enforce ROS's house style -- single quotes, import order, docstring
+  # form, a copyright header on every file, an xmllint-formatted package.xml.
+  # This repo has already decided against style gates: see the lint job in
+  # .github/workflows/ci.yml, which runs only the bug-catching ruff rules
+  # because "a lint job that fails on an unused import trains you to ignore a
+  # red CI". Enabling them here contradicted that to the tune of 449 failures,
+  # which nobody noticed only because colcon test was never discovering these
+  # packages at all (see the --base-paths note in that workflow).
 
   # The contract test is plain pytest over the .msg/.srv text -- it needs no
   # ROS at all, which is the point: it also runs in the pip-only CI job on a

@@ -66,6 +66,11 @@ class GazeMapper:
             face = track.keypoints.face_anchor()
             if face is not None:
                 return face
+        if track.person_bbox is not None:
+            # `bbox` is already the head, so its centre is the aim point. The
+            # upper-third rule below exists only to find a head inside a
+            # whole-body box, and applying it here would aim at the forehead.
+            return (track.bbox.cx, track.bbox.cy)
         return (track.bbox.cx, track.bbox.y1 + track.bbox.height / 3.0)
 
     def to_attention(

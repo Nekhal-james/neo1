@@ -21,13 +21,13 @@ from __future__ import annotations
 import array
 import io
 import logging
+import re
 import sys
 import threading
 import wave
 from dataclasses import dataclass
-from pathlib import Path
 
-from .config import Config
+from .config import Config, resolve_path
 
 log = logging.getLogger("intelligence.tts")
 
@@ -78,17 +78,21 @@ def availability(cfg: Config) -> Availability:
             ".onnx voice in config/intelligence.local.yaml",
             model_path="",
         )
-    if not Path(path).exists():
-        return Availability(False, f"piper voice model not found: {path}", model_path=path)
+    # Relative to the repo root, not the working directory -- see resolve_path.
+    resolved = resolve_path(path)
+    if not resolved.exists():
+        return Availability(
+            False, f"piper voice model not found: {resolved}", model_path=str(resolved)
+        )
     try:
         import piper  # noqa: F401
     except ImportError:
         return Availability(
             False,
             "piper-tts not installed -- pip install -e '.[voice]' from the repo root",
-            model_path=path,
+            model_path=str(resolved),
         )
-    return Availability(True, model_path=path)
+    return Availability(True, model_path=str(resolved))
 
 
 def _load_voice(cfg: Config):
@@ -97,11 +101,13 @@ def _load_voice(cfg: Config):
             "tts.piper_model_path is not configured -- set it in "
             "config/intelligence.local.yaml to a downloaded Piper .onnx voice"
         )
-    model_path = Path(cfg.tts.piper_model_path)
+    model_path = resolve_path(cfg.tts.piper_model_path)
     if not model_path.exists():
         raise RuntimeError(f"piper voice model not found: {model_path}")
 
-    config_path = Path(cfg.tts.piper_config_path) if cfg.tts.piper_config_path else None
+    config_path = (
+        resolve_path(cfg.tts.piper_config_path) if cfg.tts.piper_config_path else None
+    )
     key = f"{model_path}|{config_path or ''}"
     with _voices_lock:
         cached = _voices.get(key)
@@ -228,3 +234,80 @@ def synthesize_pcm(text: str, cfg: Config, target_rate: int | None = None) -> Pc
         rate = target_rate
 
     return PcmAudio(data=frames, sample_rate=rate)
+
+
+# -- sentence splitting ------------------------------------------------------
+
+_BOUNDARY = re.compile(r"[.!?]+[\"')\]]*\s+")
+
+_ABBREVIATIONS = frozenset(
+    {"dr", "mr", "mrs", "ms", "prof", "st", "no", "vs", "etc", "approx", "dept", "jr", "sr"}
+)
+
+_SOFT_BREAKS = (", ", "; ", ": ")
+
+
+def split_sentences(text: str, *, max_chars: int = 200) -> list[str]:
+    """Break a reply into the pieces Piper should synthesize one at a time.
+
+    Speaking sentence by sentence is what lets Neo start talking before the
+    whole reply has been synthesized (plan 5.5): the wait a person hears is the
+    first sentence, not the reply.
+
+    Conservative on purpose, because the two kinds of mistake cost very
+    different amounts. Merging two sentences into one synthesis call costs a
+    little latency and is otherwise inaudible -- Piper speaks an internal full
+    stop perfectly well. Splitting in the wrong place, after "Dr." or inside
+    "A.P.J. Abdul Kalam", makes the voice stop dead mid-name. So a stop only
+    counts when it is followed by a capital or a digit, and not when the word
+    before it is a known abbreviation, a single letter, or itself contains a
+    full stop.
+
+    Anything still longer than `max_chars` is wrapped at a comma, then at a
+    space, so one long sentence cannot bring back the delay streaming removes.
+    No word is ever dropped: joining the pieces with spaces gives back the
+    input with its whitespace normalized.
+    """
+    text = " ".join(text.split())
+    if not text:
+        return []
+    max_chars = max(20, max_chars)
+
+    sentences: list[str] = []
+    start = 0
+    for match in _BOUNDARY.finditer(text):
+        following = text[match.end() : match.end() + 1]
+        if not following or not (following.isupper() or following.isdigit() or following in "\"'("):
+            continue
+        word = text[start : match.start()].rsplit(" ", 1)[-1].lstrip("\"'(").lower()
+        if word in _ABBREVIATIONS or len(word) <= 1 or "." in word:
+            continue
+        sentences.append(text[start : match.end()].strip())
+        start = match.end()
+    tail = text[start:].strip()
+    if tail:
+        sentences.append(tail)
+
+    pieces: list[str] = []
+    for sentence in sentences:
+        pieces.extend(_wrap(sentence, max_chars))
+    return pieces
+
+
+def _wrap(sentence: str, max_chars: int) -> list[str]:
+    pieces: list[str] = []
+    while len(sentence) > max_chars:
+        cut = max(sentence.rfind(sep, 0, max_chars) for sep in _SOFT_BREAKS)
+        if cut > 0:
+            head, rest = sentence[: cut + 1], sentence[cut + 1 :]
+        else:
+            cut = sentence.rfind(" ", 0, max_chars + 1)
+            if cut > 0:
+                head, rest = sentence[:cut], sentence[cut:]
+            else:
+                head, rest = sentence[:max_chars], sentence[max_chars:]
+        pieces.append(head.strip())
+        sentence = rest.strip()
+    if sentence:
+        pieces.append(sentence)
+    return pieces

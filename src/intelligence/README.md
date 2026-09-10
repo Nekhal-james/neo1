@@ -62,7 +62,7 @@ gated behind the `voice` extra (same reasoning as `neo_perception`'s
 so most development doesn't need Vosk/Piper installed at all.
 
 Both need a real downloaded model file (a Vosk model directory, a Piper
-`.onnx` voice) configured in `config/intelligence.local.yaml` — with no path
+`.onnx` voice) configured in `config/intelligence.local.yaml` (relative paths resolve against the repo root, so one file serves Windows and WSL alike) — with no path
 configured or no file found, they raise a clear error, the same tone as
 `model_conn.ollama.up()`'s error handling, never a bare stack trace.
 `availability()` on each module answers the same question *without* loading
@@ -123,11 +123,12 @@ reads it with zero ROS installed via `GET /api/dialog/status` (see
 `src/neo_webapp/neo_webapp/dialog_status.py`), exactly how `/api/link/status`
 already surfaces `model_conn`'s state.
 
-That is now written from **two** surfaces, not one: `neo --prompt` and the
-panel's Dialog tab, which posts to `/api/dialog/ask`. Both call this same
-`ask()`, so endpoint resolution, mTLS, the degraded reply and the status write
-cannot drift between them — and the "last chat turn" card reflects whichever
-asked last.
+That is now written from **three** surfaces: `neo --prompt`, the panel's
+Dialog tab (`/api/dialog/ask`), and a spoken turn on the Audio tab, where a final
+transcript is asked and the reply spoken back. All three call this same `ask()`,
+so endpoint resolution, mTLS, the degraded reply and the status write cannot
+drift between them — and the "last chat turn" card reflects whichever asked
+last.
 
 ## Running it
 

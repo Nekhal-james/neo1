@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # The four Python packages, plus the two ROS packages' pure-Python tests.
+  # The six Python packages, plus the two ROS packages' pure-Python tests.
   # No ROS install: everything here is deliberately runnable on a bare laptop,
   # which is what lets most of the project be developed without a robot.
   # ---------------------------------------------------------------------------
@@ -32,13 +32,14 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Test each package from its own directory
-        # Per-package, from inside each directory, on purpose: the four
+        # Per-package, from inside each directory, on purpose: the
         # tests/conftest.py files collide if pytest is run once from the repo
         # root. See CLAUDE.md.
         run: |
           set -e
-          for pkg in src/neo_webapp src/neo_perception src/model-conn \
-                     src/intelligence src/neo_msgs src/neo_bringup; do
+          for pkg in src/neo_webapp src/neo_perception src/neo_motion \
+                     src/neo_emotion src/model-conn src/intelligence \
+                     src/neo_msgs src/neo_bringup; do
             echo "::group::$pkg"
             (cd "$pkg" && python -m pytest -q)
             echo "::endgroup::"
@@ -79,17 +80,25 @@ jobs:
           set -e
           apt-get update
           rosdep update --rosdistro jazzy
-          # Only neo_msgs and neo_bringup are built: the four Python packages
+          # Only neo_msgs and neo_bringup are built: the six Python packages
           # carry a COLCON_IGNORE, because pip owns their install (see the root
           # setup.py, and the note inside any of those files).
           rosdep install --from-paths src --ignore-src -y --rosdistro jazzy
 
       - name: Build
         shell: bash
+        # --base-paths src is load-bearing, not decoration. The repo root has a
+        # setup.py, so a bare `colcon build` identifies the root itself as one
+        # Python package and never descends into src/ -- it finds neither
+        # neo_msgs nor neo_bringup, reports "0 packages finished", and exits 0.
+        # A green build that built nothing is the worst possible outcome here,
+        # since this job is the only thing validating the contracts as real IDL.
         run: |
           set -e
           . /opt/ros/jazzy/setup.sh
-          colcon build --symlink-install
+          colcon build --base-paths src --symlink-install
+          # Fail loudly rather than silently if discovery ever breaks again.
+          test -d install/neo_msgs || { echo "neo_msgs was not built"; exit 1; }
 
       - name: Test
         shell: bash
@@ -99,7 +108,7 @@ jobs:
         run: |
           set -e
           . /opt/ros/jazzy/setup.sh
-          colcon test --event-handlers console_direct+
+          colcon test --base-paths src --event-handlers console_direct+
           colcon test-result --verbose
 
       - name: Show the frozen contract

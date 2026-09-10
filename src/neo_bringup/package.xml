@@ -11,7 +11,7 @@
     ament_cmake, not ament_python, even though the launch file is Python: this
     package installs data (launch/ and config/) and ships no importable module,
     so there is nothing for setuptools to do. It also keeps the repo's "one
-    setup.py at the root" rule intact -- see ../../setup.py.
+    setup.py at the root" rule intact; see ../../setup.py.
   -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -27,7 +27,8 @@
     would make this package unbuildable until the project was finished.
   -->
 
-  <test_depend>ament_lint_common</test_depend>
+  <!-- No ament_lint_common: its linters enforce a house style this repo
+       has decided against gating on. See CMakeLists.txt. -->
   <test_depend>python3-pytest</test_depend>
 
   <export>

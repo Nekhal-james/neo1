@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -19,6 +20,7 @@ from .link_status import read_link_status
 from .media import MediaManager, media_router
 from .perception_link import PerceptionLink
 from .speech import SpeechLink
+from .voice import VoiceLoop
 
 try:
     from neo_perception.status_store import write_status as write_vision_status
@@ -59,6 +61,10 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
         app.state.bridge.snapshot().audio = speech.view(
             listening=app.state.media.active("mic")
         )
+        # The loop publishes on every transition, but an e-stop release resets
+        # the badge underneath it; re-publishing here puts it back within a
+        # second rather than at the next turn.
+        app.state.voice.publish()
 
     async def publish_vision_status(app: FastAPI) -> None:
         """Mirror what the camera sees into var/perception/status.json, and keep
@@ -105,6 +111,7 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
                         }
                         for g in view.identify.guesses
                     ],
+                    palm=asdict(view.palm) if view.palm is not None else None,
                 )
             except Exception:
                 log.exception("vision status write failed")
@@ -121,6 +128,7 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
             publisher.cancel()
             with suppress(asyncio.CancelledError):
                 await publisher
+            await app.state.voice.close()
             await app.state.bridge.stop()
 
     app = FastAPI(title="Neo admin panel", version="0.1.0", lifespan=lifespan)
@@ -142,6 +150,7 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
         mic_rate=cfg.media.mic_sample_rate,
         speaker_rate=cfg.media.speaker_sample_rate,
     )
+    app.state.voice = VoiceLoop(app.state)
 
     app.include_router(api_router)
     app.include_router(media_router)

@@ -2,8 +2,12 @@
 #
 # Published by source_manager after every transition. The constants here are the
 # whole vocabulary of the hardware/webapp seam -- no node downstream of a mux
-# ever sees them, by design (plan 1.2: "no node subscribes to a */hw/* or
-# */webapp/* topic except its own mux").
+# ever sees them, by design (plan 1.2: "no node subscribes to a <ns>/hw/<topic>
+# or <ns>/webapp/<topic> topic except its own mux").
+#
+# Written with <ns> rather than a glob on purpose: rosidl copies these comments
+# verbatim into generated C block comments, so a star-slash sequence here would
+# close that comment early and the generated header would not compile.
 
 std_msgs/Header header
 

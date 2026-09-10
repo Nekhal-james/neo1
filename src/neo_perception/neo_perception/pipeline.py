@@ -28,7 +28,7 @@ from .engagement import EngagementConfig, EngagementController
 from .gaze import GazeCommand, GazeConfig, GazeMapper
 from .gestures import GestureConfig, GestureRecognizer
 from .tracker import MultiTracker, TrackerConfig
-from .types import Detection, FacingState, ObjectGuess, PerceptionResult
+from .types import BBox, Detection, FacingState, ObjectGuess, PerceptionResult
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,19 @@ class PipelineConfig:
     target_fps: float = 4.0
     """Inference rate ceiling. Defaults to the Pi 4 working point; raise it on a
     machine that can afford more."""
+
+    track_head: bool = True
+    """Track the head rather than the whole person.
+
+    The reception-desk default. People stand close enough that the person box is
+    clipped by the frame and its centre sits on a torso filling the view, while
+    the head stays whole and is what the pan/tilt assembly actually aims at.
+    Detection measurably *improves* at that range -- what degrades is the body
+    keypoints, not the face ones.
+
+    Set False for a wide shot where whole people are visible and the extra
+    stability of a large box is worth more.
+    """
 
 
 class PerceptionPipeline:
@@ -85,6 +98,8 @@ class PerceptionPipeline:
 
         detections, inference_ms = _timed(self.detector, frame)
         persons = [d for d in detections if d.label == "person" or d.class_id == 0]
+        if self.cfg.track_head:
+            persons = [_as_head_detection(d) for d in persons]
 
         tracks = self.tracker.update(persons, stamp)
         visible = self.tracker.visible_tracks(stamp)
@@ -113,6 +128,8 @@ class PerceptionPipeline:
             gestures=gesture_events,
             attention=attention,
             inference_ms=inference_ms,
+            palm_check=self._explain_palm(visible, stamp),
+            hold_progress=self.engagement.hold_progress(stamp),
         )
         return self.last_result
 
@@ -156,6 +173,19 @@ class PerceptionPipeline:
 
     def release(self, reason: str = "released") -> None:
         self.engagement.release(reason)
+
+    def _explain_palm(self, visible, stamp: float):
+        """The palm check for whoever matters most on this frame.
+
+        The candidate part-way through a hold if there is one, else the locked
+        target, else the nearest person -- the one who would win if they raised
+        a hand now.
+        """
+        by_id = {t.track_id: t for t in visible}
+        track = by_id.get(self.engagement.candidate_id) or by_id.get(self.engagement.target_id)
+        if track is None and visible:
+            track = max(visible, key=lambda t: t.bbox.area)
+        return self.gestures.explain(track, stamp) if track is not None else None
 
     def reset(self) -> None:
         self.tracker.reset()
@@ -244,6 +274,49 @@ class AsyncPerception:
         self.pipeline.request_identify()
         # Nudge the worker: a question should not wait out an idle timeout.
         self._wake.set()
+
+
+def _as_head_detection(det: Detection) -> Detection:
+    """Swap `bbox` for the head, keeping the person box alongside it.
+
+    Done by rewriting the detection rather than teaching the tracker about two
+    boxes: everything downstream -- association, border tests, "nearest person
+    is the biggest box" -- then operates on the head with no special cases, and
+    a bigger head still correctly means a closer person.
+
+    Every tracked box must be a head, including when the keypoints gave us
+    nothing: salience is "largest box wins", so one person box left among head
+    boxes is several times the area of any of them and would always win. Rather
+    than let the semantics mix, fall back to the top of the person box -- a
+    guess, but a head-shaped one that compares fairly against the rest.
+    """
+    head = det.head_bbox or _head_from_person_box(det.bbox)
+    if head is None:
+        return det
+    return Detection(
+        bbox=head,
+        score=det.score,
+        label=det.label,
+        class_id=det.class_id,
+        keypoints=det.keypoints,
+        head_bbox=head,
+        person_bbox=det.bbox,
+    )
+
+
+def _head_from_person_box(box: BBox) -> BBox | None:
+    """Last-resort head region: the top of the person box.
+
+    Only reached when the pose model gave no usable keypoints at all -- a
+    plain detect model, or a person too small or too dark to resolve a face.
+    Proportions are rough anthropometry (a head is roughly an eighth of a
+    standing figure), and the point is a comparable box, not an accurate one.
+    """
+    if box.width <= 0 or box.height <= 0:
+        return None
+    width = box.width * 0.35
+    height = min(width * 1.35, box.height * 0.3)
+    return BBox(box.cx - width / 2, box.y1, box.cx + width / 2, box.y1 + height)
 
 
 def rank_presented_objects(

@@ -26,7 +26,20 @@ LOCAL_CONFIG = CONFIG_DIR / "intelligence.local.yaml"
 @dataclass
 class ChatConfig:
     model_name: str = ""
-    timeout_s: float = 8.0
+
+    timeout_s: float = 60.0
+    """How long to wait for a *reply*, once the host has answered the connect.
+
+    Not the same question as "is the host there", and not the same answer: that
+    one is `model_conn`'s `receiver.probe_timeout_s`, and it stays ~1 s so a
+    dead link degrades promptly. This one has to survive a cold model load,
+    which is ~45 s for a 3B model -- measured, not guessed. At the old 8 s the
+    first question after any idle period timed out and returned the degraded
+    reply, which on a reception desk is most first questions.
+
+    Raising it costs nothing when the host is absent, because the connect
+    timeout is what fails then, in about a second.
+    """
 
 
 @dataclass
@@ -73,12 +86,12 @@ class Config:
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
-        p = _config_path(path)
+        layers = _config_layers(path)
         raw: dict[str, Any] = {}
-        if p is not None and p.exists():
-            raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        for layer in layers:
+            raw = _deep_merge(raw, yaml.safe_load(layer.read_text(encoding="utf-8")) or {})
         cfg = cls._from_raw(raw)
-        cfg.source_path = p
+        cfg.source_path = layers[-1] if layers else None
         return cfg
 
     @classmethod
@@ -91,7 +104,7 @@ class Config:
         return cls(
             chat=ChatConfig(
                 model_name=chat_raw.get("model_name", ""),
-                timeout_s=float(chat_raw.get("timeout_s", 8.0)),
+                timeout_s=float(chat_raw.get("timeout_s", ChatConfig.timeout_s)),
             ),
             asr=AsrConfig(
                 engine=asr_raw.get("engine", "vosk"),
@@ -113,19 +126,52 @@ class Config:
         )
 
 
-def _config_path(explicit: str | Path | None) -> Path | None:
+def _config_layers(explicit: str | Path | None) -> list[Path]:
+    """The files to merge, in increasing precedence.
+
+    An explicit path or `$NEO_INTELLIGENCE_CONFIG` names *one* file and means
+    exactly that file -- naming a config and then having a second one silently
+    layered over it would be worse than surprising.
+
+    Otherwise the local file is merged **over** the committed one rather than
+    replacing it. Replacing was the old behaviour and it was a quiet trap: a
+    local file holding one key switched off every other value in the committed
+    config, which then fell back to whatever the dataclasses happened to
+    default to. Those defaults mostly match the shipped YAML, so nothing looked
+    broken -- until one of them did not, and the committed file that plainly
+    said otherwise was being ignored.
+    """
     if explicit:
-        return Path(explicit)
+        return [Path(explicit)]
     env = os.environ.get("NEO_INTELLIGENCE_CONFIG")
     if env:
-        return Path(env)
-    if LOCAL_CONFIG.exists():
-        return LOCAL_CONFIG
-    if DEFAULT_CONFIG.exists():
-        return DEFAULT_CONFIG
-    return None
+        return [Path(env)]
+    return [p for p in (DEFAULT_CONFIG, LOCAL_CONFIG) if p.exists()]
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for k, v in overlay.items():
+        if isinstance(out.get(k), dict) and isinstance(v, dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
 
 
 def _resolve(p: str | Path) -> Path:
     path = Path(p)
     return path if path.is_absolute() else (REPO_ROOT / path)
+
+
+def resolve_path(p: str | Path) -> Path:
+    """A configured path as this config means it: relative to the repo root.
+
+    Not to the working directory. The same config file is read by `neo --webapp
+    up` in WSL and by `neo --prompt` on Windows, each launched from wherever the
+    operator happened to be; an absolute path cannot be right for both, and a
+    CWD-relative one is only right by accident. Model paths were CWD-relative
+    for a while, so `models/vosk-model-...` worked from the repo root and
+    reported "model not found" from anywhere else.
+    """
+    return _resolve(p)

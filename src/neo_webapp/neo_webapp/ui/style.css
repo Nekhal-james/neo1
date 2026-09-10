@@ -330,3 +330,5 @@ video, canvas.preview {
 
 .ask-row { display: flex; gap: 8px; }
 .ask-row input { flex: 1; }
+
+.check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }

@@ -134,6 +134,43 @@ class AudioView:
 
 
 @dataclass
+class VoiceTurnView:
+    """One spoken exchange: what was heard, what Neo said back, and how long.
+
+    The two latencies are the ones a person at the desk actually feels, and
+    they go wrong for different reasons. `think_ms` is the model -- on a cold
+    host it is nearly all of the wait. `first_audio_ms` adds synthesis of the
+    first sentence only, because the rest is streamed in behind it.
+    """
+
+    heard: str = ""
+    reply: str = ""
+    # "ollama" or "degraded", the same vocabulary as /api/dialog/ask.
+    source: str = ""
+    think_ms: float = 0.0
+    first_audio_ms: float = 0.0
+    spoken_s: float = 0.0
+    sentences: int = 0
+    error: str = ""
+
+
+@dataclass
+class VoiceView:
+    """The spoken conversation loop: a transcript in, a reply out loud."""
+
+    # Answer final transcripts out loud. Off until an operator switches it on:
+    # with it on, what the room says to an open mic goes to the model host.
+    enabled: bool = False
+    # idle | listening | thinking | speaking
+    phase: str = "idle"
+    # The mic is open but its audio is *not* reaching the recognizer, because
+    # Neo's own voice is still playing (half-duplex, plan 5.6).
+    gated: bool = False
+    turns: int = 0
+    last: VoiceTurnView = field(default_factory=VoiceTurnView)
+
+
+@dataclass
 class HeadState:
     """Mirrors /head/state, plus the limits the UI needs to render them."""
 
@@ -196,6 +233,14 @@ class TrackView:
     gesture: str = "none"
     facing: str = "unknown"
 
+    px1: float | None = None
+    py1: float | None = None
+    px2: float | None = None
+    py2: float | None = None
+    """The full-person box, when the tracked box above is the head. Drawn
+    faintly behind it so an operator can see the framing the head came
+    from -- at desk range it is usually clipped by the frame edge."""
+
 
 @dataclass
 class ObjectGuessView:
@@ -236,6 +281,27 @@ class IdentifyView:
 
 
 @dataclass
+class PalmView:
+    """Why the most relevant person is or is not showing a palm, arm by arm.
+
+    So a palm that will not register can be diagnosed from the panel -- which
+    link of the chain broke, and by how much -- instead of by guessing at
+    thresholds.
+    """
+
+    track_id: int | None = None
+    verdict: str = "none"
+    reason: str = ""
+    arm: str = ""
+    lift: float | None = None
+    forearm_tilt_deg: float | None = None
+    forearm_len: float | None = None
+    wrist_score: float = 0.0
+    elbow_score: float = 0.0
+    shoulder_score: float = 0.0
+
+
+@dataclass
 class PerceptionView:
     """Perception state for the Vision tab."""
 
@@ -261,6 +327,9 @@ class PerceptionView:
     # Normalised aim point, y positive up, matching the joystick convention.
     aim_x: float = 0.0
     aim_y: float = 0.0
+    palm: PalmView | None = None
+    # 0 to 1 through the palm hold; 1 once locked.
+    hold_progress: float = 0.0
 
 
 @dataclass
@@ -275,6 +344,7 @@ class RobotState:
     media: MediaChannels = field(default_factory=MediaChannels)
     perception: PerceptionView = field(default_factory=PerceptionView)
     audio: AudioView = field(default_factory=AudioView)
+    voice: VoiceView = field(default_factory=VoiceView)
     nodes: list[NodeStatus] = field(default_factory=list)
     # Rolling counters, useful for confirming a stream is actually flowing.
     camera_fps_in: float = 0.0

@@ -70,6 +70,7 @@ function render(s) {
   $('v-channels').textContent = open.length ? open.join(', ') : 'none';
 
   renderAudio(s.audio, s.media);
+  renderVoice(s.voice);
 
   // system
   $('v-cpu').textContent = `${s.system.cpu_percent.toFixed(0)} %`;
@@ -87,6 +88,9 @@ function render(s) {
   $('v-tilt').textContent = `${s.head.tilt_deg.toFixed(1)}°`;
   $('v-limit').textContent = s.head.at_limit ? 'yes' : 'no';
   $('v-src').textContent = s.head.active_source;
+  $('v-mood').textContent = s.emotion
+    ? `${s.emotion.label.toLowerCase()} (${s.emotion.intensity.toFixed(2)})`
+    : '—';
   $('v-estop').textContent = s.head.estop ? 'ENGAGED' : 'clear';
   $('btn-estop').classList.toggle('engaged', s.head.estop);
   $('btn-estop').textContent = s.head.estop ? 'RELEASE E-STOP' : 'E-STOP';
@@ -237,6 +241,7 @@ function renderPerception(p) {
 
   $('v-eng-target').textContent = p.target_id === null ? '—' : `#${p.target_id}`;
   $('v-eng-gesture').textContent = p.last_gesture;
+  renderPalm(p);
   $('v-eng-release').textContent = p.release_reason || '—';
   $('v-eng-aim').textContent = `${p.aim_x.toFixed(2)}, ${p.aim_y.toFixed(2)}`;
   $('v-eng-wants').textContent = (p.engage_gesture || '').replace('_', ' ') || '—';
@@ -255,6 +260,28 @@ function renderPerception(p) {
   drawOverlay(p);
 }
 
+// Which link of the palm test broke, for whoever matters most right now. A palm
+// that will not register is otherwise a guessing game.
+function renderPalm(p) {
+  const el = $('v-eng-palm');
+  const palm = p.palm;
+  if (!palm) {
+    el.textContent = p.person_count ? '—' : 'nobody in view';
+    el.style.color = '';
+  } else {
+    const detail = [];
+    if (palm.forearm_tilt_deg !== null) detail.push(`tilt ${palm.forearm_tilt_deg.toFixed(0)}°`);
+    detail.push(`elbow ${palm.elbow_score.toFixed(2)}`, `wrist ${palm.wrist_score.toFixed(2)}`);
+    const verdict = palm.verdict.replace('_', ' ');
+    el.textContent = `#${palm.track_id} ${verdict}${palm.reason ? ' — ' + palm.reason : ''} (${detail.join(', ')})`;
+    el.style.color = palm.verdict === 'open_palm' ? 'var(--good)'
+      : palm.verdict === 'none' ? '' : 'var(--warn)';
+  }
+  $('v-eng-hold').textContent = p.engaged
+    ? 'locked'
+    : `${Math.round((p.hold_progress || 0) * 100)} %`;
+}
+
 function drawOverlay(p) {
   const canvas = $('vision-overlay');
   const stage = canvas.parentElement;
@@ -271,6 +298,17 @@ function drawOverlay(p) {
   stage.classList.toggle('live', !!camStream || p.tracks.length > 0);
 
   for (const t of p.tracks) {
+    // The person box, faint, behind the head. At desk range it is usually
+    // clipped by the frame edge -- which is the whole reason the head is what
+    // gets tracked.
+    if (t.px1 !== null && t.px1 !== undefined) {
+      ctx.strokeStyle = 'rgba(125,138,153,.45)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.strokeRect(t.px1 * w, t.py1 * h, (t.px2 - t.px1) * w, (t.py2 - t.py1) * h);
+      ctx.setLineDash([]);
+    }
+
     const x = t.x1 * w, y = t.y1 * h;
     const bw = (t.x2 - t.x1) * w, bh = (t.y2 - t.y1) * h;
 
@@ -708,6 +746,117 @@ async function loadAudioStatus() {
   if (res.status === 401) { window.location = '/login'; return; }
   if (res.ok) renderAudio(await res.json(), null);
 }
+
+// ----------------------------------------------------------------- voice
+
+// The spoken loop. The server owns the turn and the half-duplex gate; this
+// renders what it reports and flips the one switch.
+const PHASE_TEXT = {
+  idle: 'idle — mic closed',
+  listening: 'listening',
+  thinking: 'thinking…',
+  speaking: 'speaking',
+};
+// While a toggle request is in flight, the 4 Hz snapshot still carries the old
+// value; without this the checkbox flicks back under the operator's finger.
+let voiceTogglePending = false;
+
+function renderVoice(v) {
+  if (!v) return;
+  let phase = PHASE_TEXT[v.phase] || v.phase;
+  if (v.phase === 'speaking' && v.gated) phase += ' — mic muted so it cannot hear itself';
+  $('v-voice-phase').textContent = phase;
+  if (!voiceTogglePending) $('voice-enabled').checked = v.enabled;
+
+  const t = v.last || {};
+  $('v-voice-heard').textContent = t.heard || '—';
+  $('v-voice-reply').textContent = t.reply || '—';
+  const parts = [];
+  if (t.source) parts.push(t.source);
+  if (t.think_ms) parts.push(`thinking ${t.think_ms.toFixed(0)} ms`);
+  if (t.first_audio_ms) parts.push(`first audio ${t.first_audio_ms.toFixed(0)} ms`);
+  if (t.spoken_s) {
+    parts.push(`spoke ${t.spoken_s.toFixed(1)} s in ${t.sentences} sentence${t.sentences === 1 ? '' : 's'}`);
+  }
+  $('v-voice-timing').textContent = parts.length ? parts.join(' · ') : '—';
+  showReason('voice-warning', !t.error, t.error);
+  $('btn-talk').textContent = micStream ? 'Stop talking' : 'Start talking';
+}
+
+async function setVoiceEnabled(enabled) {
+  voiceTogglePending = true;
+  let body = null;
+  try {
+    const res = await fetch('/api/voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (res.status === 401) { window.location = '/login'; return; }
+    if (res.ok) body = await res.json();
+  } finally {
+    voiceTogglePending = false;
+  }
+  if (body) renderVoice(body);
+}
+
+$('voice-enabled').addEventListener('change', (e) => setVoiceEnabled(e.target.checked));
+
+// One button for the whole thing. Clicking the Sources-tab buttons from inside
+// this handler keeps it within the user gesture that getUserMedia and a fresh
+// AudioContext both insist on.
+$('btn-talk').addEventListener('click', async () => {
+  if (micStream) { stopMic(); return; }
+  if (!spkWs) $('btn-spk').click();
+  $('btn-mic').click();
+  await setVoiceEnabled(true);
+});
+
+$('btn-ask-voice').addEventListener('click', async () => {
+  const text = askInput.value.trim();
+  if (!text) return;
+  const out = $('ask-answer');
+  const btn = $('btn-ask-voice');
+  btn.disabled = true;
+  askBtn.disabled = true;
+  out.hidden = false;
+  out.className = 'answer';
+  out.textContent = 'Thinking…';
+
+  try {
+    const res = await fetch('/api/voice/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (res.status === 401) { window.location = '/login'; return; }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      out.className = 'answer bad';
+      out.textContent = body.detail || `request failed (${res.status})`;
+      return;
+    }
+    // Same colours as the typed Ask: degraded is amber, not red.
+    out.className = !body.reply ? 'answer bad'
+      : (body.error || body.source === 'degraded') ? 'answer' : 'answer good';
+    out.textContent = body.reply || body.error || '(no reply)';
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const bits = [body.source || '?', `thinking ${(body.think_ms || 0).toFixed(0)} ms`];
+    if (body.first_audio_ms) bits.push(`first audio ${body.first_audio_ms.toFixed(0)} ms`);
+    if (body.error && body.reply) bits.push(body.error);
+    meta.textContent = bits.join(' · ');
+    out.appendChild(meta);
+    askInput.value = '';
+    pollDialogStatus();
+  } catch {
+    out.className = 'answer bad';
+    out.textContent = 'could not reach the panel';
+  } finally {
+    btn.disabled = false;
+    askBtn.disabled = false;
+  }
+});
 
 // ------------------------------------------------------------------ boot
 

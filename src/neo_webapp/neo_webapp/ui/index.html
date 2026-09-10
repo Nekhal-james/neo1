@@ -123,6 +123,9 @@
           <div class="row"><span class="k">Tilt</span><span class="v" id="v-tilt">—</span></div>
           <div class="row"><span class="k">At limit</span><span class="v" id="v-limit">—</span></div>
           <div class="row"><span class="k">Arbiter source</span><span class="v" id="v-src">—</span></div>
+          <!-- Mood belongs here rather than only on the Emotion tab: it is a
+               movement modifier, so it is only legible next to the movement. -->
+          <div class="row"><span class="k">Mood</span><span class="v" id="v-mood">—</span></div>
           <div class="row"><span class="k">E-stop</span><span class="v" id="v-estop">—</span></div>
         </div>
       </div>
@@ -148,9 +151,12 @@
           <div class="answer" id="identify-answer" hidden></div>
           <div class="hint">
             Show your palm — hand up, forearm vertical — and hold it for about
-            half a second to engage. The lock follows you, survives the detector
-            dropping a frame, and releases on its own when you leave the frame
-            or turn your back.
+            half a second to engage. Your raised elbow has to be in shot: from a
+            laptop camera that means sitting back about a metre, because the
+            model will not guess an elbow below the frame. The lock follows you,
+            survives the detector dropping a frame, and releases on its own when
+            you leave the frame or turn your back. If it will not lock,
+            <b>Palm check</b> says which part of the pose it cannot see.
           </div>
         </div>
 
@@ -161,6 +167,8 @@
           <div class="row"><span class="k">Target facing</span><span class="v" id="v-eng-facing">—</span></div>
           <div class="row"><span class="k">Waiting for</span><span class="v" id="v-eng-wants">—</span></div>
           <div class="row"><span class="k">Last gesture</span><span class="v" id="v-eng-gesture">—</span></div>
+          <div class="row"><span class="k">Palm check</span><span class="v" id="v-eng-palm">—</span></div>
+          <div class="row"><span class="k">Hold</span><span class="v" id="v-eng-hold">—</span></div>
           <div class="row"><span class="k">Last release</span><span class="v" id="v-eng-release">—</span></div>
           <div class="row"><span class="k">Aim (x, y)</span><span class="v" id="v-eng-aim">—</span></div>
         </div>
@@ -178,6 +186,25 @@
     <!-- Audio -->
     <section class="tab" id="tab-audio">
       <div class="grid">
+        <div class="card" style="grid-column: 1 / -1; max-width: 680px">
+          <h2>Conversation</h2>
+          <div class="toggles" style="margin-top:0">
+            <button id="btn-talk">Start talking</button>
+            <label class="check"><input type="checkbox" id="voice-enabled"> Answer out loud</label>
+          </div>
+          <div class="row"><span class="k">Neo is</span><span class="v" id="v-voice-phase">—</span></div>
+          <div class="row"><span class="k">You said</span><span class="v" id="v-voice-heard">—</span></div>
+          <div class="row"><span class="k">Neo replied</span><span class="v" id="v-voice-reply">—</span></div>
+          <div class="row"><span class="k">Timing</span><span class="v" id="v-voice-timing">—</span></div>
+          <div class="answer bad" id="voice-warning" hidden></div>
+          <div class="hint">
+            <b>Start talking</b> opens the mic and the speaker and switches answering
+            on. Ask a question, pause, and Neo answers through the speaker. While it
+            is talking the mic stays open but is not transcribed — otherwise it would
+            hear its own reply and answer itself.
+          </div>
+        </div>
+
         <div class="card" style="grid-column: 1 / -1; max-width: 680px">
           <h2>Say something</h2>
           <div class="ask-row">
@@ -250,6 +277,7 @@
             <input id="ask-input" type="text" autocomplete="off"
                    placeholder="where is CS-204">
             <button id="btn-ask">Ask</button>
+            <button id="btn-ask-voice">Ask out loud</button>
           </div>
           <div class="answer" id="ask-answer" hidden></div>
           <div class="hint" id="ask-hint">

@@ -12,10 +12,19 @@ panel keeps working and simply reports perception as unavailable.
 from __future__ import annotations
 
 import logging
+import time
 
-from .bridge.types import IdentifyView, ObjectGuessView, PerceptionView, TrackView
+from .bridge.types import IdentifyView, ObjectGuessView, PalmView, PerceptionView, TrackView
 
 log = logging.getLogger(__name__)
+
+ATTENTION_MAX_AGE_S = 1.0
+"""How old a perception result may be before it stops counting.
+
+The pipeline keeps its last result for ever once frames stop arriving, so
+without this a stopped camera would leave the head locked on whoever was in the
+final frame. One second is several frames even at the Pi's rate.
+"""
 
 try:
     from neo_perception.pipeline import AsyncPerception, PerceptionPipeline, PipelineConfig
@@ -85,18 +94,28 @@ class PerceptionLink:
 
     # -- output ------------------------------------------------------------
 
-    def gaze_axes(self) -> tuple[float, float]:
-        """Pan/tilt rates in the same [-1, 1] convention as the joystick."""
+    def attention(self, max_age_s: float = ATTENTION_MAX_AGE_S):
+        """The latest attention target, or None when there is nothing current.
+
+        Deliberately not the pipeline's rate command. That command is right on
+        the robot, where the camera rides the head and turning closes the loop;
+        the panel's camera does not move with its simulated head, and see
+        MockBridge for what integrating it did.
+        """
         if self.runner is None:
-            return (0.0, 0.0)
-        command = self.runner.command
-        return (command.pan, command.tilt)
+            return None
+        result = self.runner.result
+        if result.stamp <= 0.0 or (time.monotonic() - result.stamp) > max_age_s:
+            return None
+        return result.attention
 
     def release(self, reason: str = "panel override") -> None:
         if self.runner is not None:
             self.runner.pipeline.release(reason)
 
     def reset(self) -> None:
+        # Otherwise the panel goes on showing a gesture from before the reset.
+        self._last_gesture = "none"
         if self.runner is not None:
             self.runner.pipeline.reset()
 
@@ -132,6 +151,10 @@ class PerceptionLink:
                 engaged=t.track_id == target_id,
                 gesture=gestures.get(t.track_id, "none"),
                 facing=t.facing.value,
+                px1=t.person_bbox.x1 / width if t.person_bbox else None,
+                py1=t.person_bbox.y1 / height if t.person_bbox else None,
+                px2=t.person_bbox.x2 / width if t.person_bbox else None,
+                py2=t.person_bbox.y2 / height if t.person_bbox else None,
             )
             for t in result.tracks
         ]
@@ -177,6 +200,8 @@ class PerceptionLink:
             tracks=tracks,
             aim_x=result.attention.x,
             aim_y=result.attention.y,
+            palm=_palm_view(result.palm_check),
+            hold_progress=result.hold_progress,
         )
 
     @staticmethod
@@ -186,3 +211,20 @@ class PerceptionLink:
         if not DECODE_AVAILABLE:
             return "opencv/numpy not installed"
         return ""
+
+
+def _palm_view(check) -> PalmView | None:
+    if check is None:
+        return None
+    return PalmView(
+        track_id=check.track_id,
+        verdict=check.verdict.value,
+        reason=check.reason,
+        arm=check.arm,
+        lift=check.lift,
+        forearm_tilt_deg=check.forearm_tilt_deg,
+        forearm_len=check.forearm_len,
+        wrist_score=check.wrist_score,
+        elbow_score=check.elbow_score,
+        shoulder_score=check.shoulder_score,
+    )

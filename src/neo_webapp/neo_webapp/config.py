@@ -92,12 +92,12 @@ class Config:
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
-        p = _config_path(path)
+        layers = _config_layers(path)
         raw: dict[str, Any] = {}
-        if p is not None and p.exists():
-            raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        for layer in layers:
+            raw = _deep_merge(raw, yaml.safe_load(layer.read_text(encoding="utf-8")) or {})
         cfg = cls._from_raw(raw)
-        cfg.source_path = p
+        cfg.source_path = layers[-1] if layers else None
         return cfg
 
     @classmethod
@@ -144,17 +144,27 @@ class Config:
         )
 
 
-def _config_path(explicit: str | Path | None) -> Path | None:
+def _config_layers(explicit: str | Path | None) -> list[Path]:
+    """The files to merge, in increasing precedence.
+
+    An explicit path or `$NEO_WEBAPP_CONFIG` names *one* file and means exactly
+    that file: layering something else over a config the caller named would be
+    worse than surprising, and the test suite depends on it.
+
+    Otherwise the local file is merged **over** the committed one, which is what
+    config/webapp.yaml has always said happens. It did not: the local file
+    replaced the committed one outright, so a local file holding just the
+    password hash switched off every other value in webapp.yaml. Those fell back
+    to the dataclass defaults, which mostly match the shipped YAML -- so the bug
+    stayed invisible until one of them did not match, and the committed file
+    that plainly said otherwise turned out to be inert.
+    """
     if explicit:
-        return Path(explicit)
+        return [Path(explicit)]
     env = os.environ.get("NEO_WEBAPP_CONFIG")
     if env:
-        return Path(env)
-    if LOCAL_CONFIG.exists():
-        return LOCAL_CONFIG
-    if DEFAULT_CONFIG.exists():
-        return DEFAULT_CONFIG
-    return None
+        return [Path(env)]
+    return [p for p in (DEFAULT_CONFIG, LOCAL_CONFIG) if p.exists()]
 
 
 def _resolve(p: str | Path) -> Path:

@@ -89,6 +89,26 @@ class BBox:
         )
 
 
+def _plausible_head_width(
+    width: float, shoulder_span: float | None, person_bbox: BBox | None
+) -> bool:
+    """Is this a believable head width, given whatever scale we can see?
+
+    Anthropometry, loosely: a head is about 15 cm across and shoulders about
+    40 cm, so head/shoulders lands near 0.38. The bounds are wide because
+    perspective, rotation and keypoint noise all move it -- they exist to
+    reject the degenerate cases (an ear span of two pixels, a head wider than
+    the body), not to enforce a ratio.
+    """
+    if width <= 2.0:
+        return False
+    if shoulder_span and shoulder_span > 1.0:
+        return 0.22 * shoulder_span <= width <= 0.95 * shoulder_span
+    if person_bbox is not None and person_bbox.width > 0:
+        return 0.12 * person_bbox.width <= width <= 0.85 * person_bbox.width
+    return True
+
+
 @dataclass(frozen=True)
 class Keypoint:
     x: float
@@ -146,6 +166,103 @@ class Keypoints:
             sum(p.x for p in vis) / len(vis),
             sum(p.y for p in vis) / len(vis),
         )
+
+    def head_box(
+        self,
+        person_bbox: BBox | None = None,
+        min_score: float = 0.3,
+    ) -> BBox | None:
+        """The head, derived from the face keypoints already in hand.
+
+        At a reception desk people stand close, so the *person* box is usually
+        clipped by the frame edge and its centre lands somewhere on a torso that
+        fills the view. The head is the part that stays whole, and it is what a
+        head-and-camera assembly actually wants to point at.
+
+        Costs no extra inference: nose, eyes and ears come from the same pose
+        pass. Measured close up, they stay 4-5 of 5 visible even when the body
+        keypoints have fallen to 2 of 8.
+
+        Width comes from the widest reliable span available, in preference
+        order, because each degrades differently:
+
+        * **ear to ear** is the head's true width, but the two ears collapse
+          together in profile, so it is only trusted once they are far enough
+          apart to mean something,
+        * **eye to eye** is about 0.31 of head width and survives profile far
+          better,
+        * **shoulders** are a last resort at roughly 0.45 of their span, used
+          when the face is turned away and only an ear or nothing is visible.
+
+        Returns None when nothing usable is visible; callers fall back to the
+        person box themselves rather than being handed a fabricated one.
+        """
+        pts = [p for p in (self.get(n, min_score) for n in FACE_KEYPOINTS) if p]
+
+        shoulders = self._shoulder_span(min_score)
+        # A shoulder span can itself be degenerate -- turned away or in poor
+        # light the two keypoints collapse to a few pixels apart. Trusting that
+        # as the scale reference rejects every other candidate as "too wide" and
+        # yields no head at all, so check the reference before believing it.
+        if (
+            shoulders
+            and person_bbox is not None
+            and person_bbox.width > 0
+            and shoulders < 0.15 * person_bbox.width
+        ):
+            shoulders = None
+
+        left_ear, right_ear = self.get("left_ear", min_score), self.get("right_ear", min_score)
+        left_eye, right_eye = self.get("left_eye", min_score), self.get("right_eye", min_score)
+
+        # Candidates in preference order. Each is checked for plausibility
+        # rather than merely for being positive: turned away or edge-on, the two
+        # ears land almost on top of each other and their span silently becomes
+        # a couple of pixels. Accepting that yields a 1x2 px "head", which then
+        # matches nothing and quietly destroys the track.
+        candidates: list[float] = []
+        if left_ear and right_ear:
+            candidates.append(
+                math.hypot(left_ear.x - right_ear.x, left_ear.y - right_ear.y) * 1.15
+            )
+        if left_eye and right_eye:
+            candidates.append(
+                math.hypot(left_eye.x - right_eye.x, left_eye.y - right_eye.y) * 3.2
+            )
+        if shoulders:
+            candidates.append(shoulders * 0.45)
+        if person_bbox is not None and person_bbox.width > 0:
+            candidates.append(person_bbox.width * 0.35)
+
+        width = next(
+            (w for w in candidates if _plausible_head_width(w, shoulders, person_bbox)),
+            None,
+        )
+        if width is None:
+            return None
+
+        if pts:
+            cx = sum(p.x for p in pts) / len(pts)
+            cy = sum(p.y for p in pts) / len(pts)
+        elif person_bbox is not None:
+            cx, cy = person_bbox.cx, person_bbox.y1 + person_bbox.height * 0.10
+        else:
+            return None
+
+        # Eyes and ears sit near the middle of the head, the nose below it, so
+        # the keypoint centroid lands low. Lift it to cover the skull.
+        height = width * 1.35
+        cy -= height * 0.18
+        half_w, half_h = width / 2.0, height / 2.0
+        return BBox(cx - half_w, cy - half_h, cx + half_w, cy + half_h)
+
+    def _shoulder_span(self, min_score: float = 0.3) -> float | None:
+        ls = self.get("left_shoulder", min_score)
+        rs = self.get("right_shoulder", min_score)
+        if not (ls and rs):
+            return None
+        span = math.hypot(ls.x - rs.x, ls.y - rs.y)
+        return span if span > 1.0 else None
 
     def has_face(self, min_score: float = 0.3) -> bool:
         """Whether the front of the head is visible.
@@ -222,6 +339,13 @@ class Detection:
     class_id: int = 0
     keypoints: Keypoints | None = None
 
+    head_bbox: BBox | None = None
+    """The head, from `Keypoints.head_box`. None when no usable keypoints."""
+
+    person_bbox: BBox | None = None
+    """The full-person box, kept when `bbox` has been swapped for the head so
+    the original is still available for overlays and debugging."""
+
 
 class GestureKind(str, Enum):
     NONE = "none"
@@ -281,6 +405,10 @@ class Track:
     score: float = 0.0
     keypoints: Keypoints | None = None
     facing: FacingState = FacingState.UNKNOWN
+    person_bbox: BBox | None = None
+    """The full-person box. `bbox` is the head when head tracking is on, so
+    gesture overlays and debugging still need this."""
+
     vx: float = 0.0
     vy: float = 0.0
     hits: int = 1
@@ -328,6 +456,33 @@ class EngagementDecision:
     person_present: bool = False
 
 
+@dataclass(frozen=True)
+class PalmCheck:
+    """Why one person's pose does or does not count as a presented palm.
+
+    The palm test is a chain of conditions, and at a real desk it breaks on
+    different links for different people: an elbow below the bottom of the
+    frame, a forearm leaning past the limit, a hand drifting enough to read as a
+    wave. Knowing which link broke is the difference between tuning the right
+    threshold and guessing at all of them. Reported for the arm that got
+    furthest through the chain.
+    """
+
+    track_id: int
+    verdict: GestureKind = GestureKind.NONE
+    reason: str = ""
+    """The first condition that failed, in words; empty when it is a palm."""
+    arm: str = ""
+    lift: float | None = None
+    """Wrist height above the shoulder, in torso units."""
+    forearm_tilt_deg: float | None = None
+    forearm_len: float | None = None
+    """Wrist-to-elbow distance, in torso units."""
+    wrist_score: float = 0.0
+    elbow_score: float = 0.0
+    shoulder_score: float = 0.0
+
+
 @dataclass
 class PerceptionResult:
     """Everything produced for one frame."""
@@ -341,6 +496,10 @@ class PerceptionResult:
     attention: AttentionTarget = field(default_factory=AttentionTarget)
     inference_ms: float = 0.0
     dropped_frames: int = 0
+    palm_check: PalmCheck | None = None
+    """Why the most relevant person is or is not showing a palm."""
+    hold_progress: float = 0.0
+    """How far through the palm hold the current candidate is, 0 to 1."""
 
     @property
     def person_count(self) -> int:

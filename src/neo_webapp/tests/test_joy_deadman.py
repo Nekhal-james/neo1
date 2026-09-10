@@ -3,6 +3,10 @@
 A stale stream that keeps driving is the one failure in this package that can
 damage hardware or a person, so it is tested at both layers: the pure motion rule,
 and the live WebSocket path.
+
+`idle_motion=False` throughout: "the head stopped" is asserted as an exact pose,
+and idle drift exists precisely so that the head is never exactly still. Leaving
+it on would test the aesthetic layer instead of the safety one.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ async def test_fresh_input_moves_the_head():
 
 @pytest.mark.asyncio
 async def test_stale_input_stops_the_head():
-    bridge = MockBridge(deadman_ms=120)
+    bridge = MockBridge(deadman_ms=120, idle_motion=False)
     await bridge.publish_joy([1.0, 0.0], [])
     for _ in range(5):
         bridge._tick(0.02)
@@ -41,7 +45,7 @@ async def test_stale_input_stops_the_head():
 
 @pytest.mark.asyncio
 async def test_neutral_axes_stop_the_head_immediately():
-    bridge = MockBridge(deadman_ms=120)
+    bridge = MockBridge(deadman_ms=120, idle_motion=False)
     await bridge.publish_joy([1.0, 0.0], [])
     for _ in range(5):
         bridge._tick(0.02)
@@ -67,13 +71,18 @@ async def test_estop_overrides_live_input():
 
 @pytest.mark.asyncio
 async def test_soft_limits_are_never_exceeded():
-    bridge = MockBridge(deadman_ms=5000)
+    bridge = MockBridge(deadman_ms=5000, idle_motion=False)
     await bridge.publish_joy([1.0, 1.0], [])
     for _ in range(1000):  # drive hard into both limits
         bridge._tick(0.02)
     head = bridge.snapshot().head
-    assert head.pan_deg == pytest.approx(head.pan_limit_deg[1])
-    assert head.tilt_deg == pytest.approx(head.tilt_limit_deg[1])
+    # Up against both stops but never past them. It settles within the driver's
+    # deadband of the limit rather than exactly on it, because chasing that last
+    # fraction of a degree is the hunting the deadband exists to prevent.
+    assert head.pan_deg <= head.pan_limit_deg[1]
+    assert head.tilt_deg <= head.tilt_limit_deg[1]
+    assert head.pan_deg == pytest.approx(head.pan_limit_deg[1], abs=0.5)
+    assert head.tilt_deg == pytest.approx(head.tilt_limit_deg[1], abs=0.5)
     assert head.at_limit
 
 

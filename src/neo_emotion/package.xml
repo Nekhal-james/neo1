@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>neo_emotion</name>
+  <version>0.1.0</version>
+  <description>Emotional state and the motion parameters it shapes. A modifier, not an actuator path.</description>
+  <maintainer email="funkydude450@gmail.com">Nekhal James</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <!-- Required only by the ROS node; the core is pure Python. -->
+  <exec_depend>neo_msgs</exec_depend>
+  <!--
+    Deliberately does NOT depend on neo_motion. Emotion publishes parameters;
+    head_behavior is what blends them into a command. A build dependency here
+    would be the first step towards this package growing a path to the servos,
+    which is the one thing its design forbids.
+  -->
+
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <!-- See ./COLCON_IGNORE for why there is no per-package setup.py yet. -->
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

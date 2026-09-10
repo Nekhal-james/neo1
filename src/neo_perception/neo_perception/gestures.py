@@ -16,9 +16,9 @@ gesture precisely because it survives the Pi's frame rate.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from .types import GestureEvent, GestureKind, Keypoints, Track
+from .types import GestureEvent, GestureKind, Keypoints, PalmCheck, Track
 
 
 @dataclass
@@ -113,6 +113,94 @@ class GestureRecognizer:
         if self._palm_presented(track.keypoints):
             return GestureKind.OPEN_PALM, confidence
         return GestureKind.RAISED_HAND, confidence
+
+    def explain(self, track: Track, stamp: float) -> PalmCheck:
+        """Say which condition decides this track's gesture, changing nothing.
+
+        Mirrors `_classify` step for step -- raised, then wave, then palm -- so
+        the verdict here is the one `update` reached for the same track and
+        frame. Call it after `update`, which records the wrist history that the
+        wave test reads.
+        """
+        kps = track.keypoints
+        if kps is None:
+            return PalmCheck(track.track_id, reason="no pose keypoints")
+        scale = kps.torso_scale(self.cfg.keypoint_min_score)
+        if scale is None:
+            return PalmCheck(track.track_id, reason="both shoulders must be visible")
+
+        arms = [self._arm_check(track.track_id, kps, side, scale) for side in ("left", "right")]
+        _, best = max(
+            arms,
+            key=lambda a: (a[0], a[1].lift if a[1].lift is not None else float("-inf")),
+        )
+
+        raised, _ = self._hand_raised(kps)
+        if not raised:
+            return replace(best, verdict=GestureKind.NONE)
+        if self._is_waving(track, stamp):
+            return replace(
+                best,
+                verdict=GestureKind.WAVE,
+                reason="hand moving side to side, which reads as a wave",
+            )
+        if self._palm_presented(kps):
+            return replace(best, verdict=GestureKind.OPEN_PALM, reason="")
+        return replace(best, verdict=GestureKind.RAISED_HAND)
+
+    def _arm_check(
+        self, track_id: int, kps: Keypoints, side: str, scale: float
+    ) -> tuple[int, PalmCheck]:
+        """How far one arm gets through the palm test, as (stage, details).
+
+        Stages follow `_palm_presented` exactly; 6 means this arm is a palm.
+        """
+        min_score = self.cfg.keypoint_min_score
+        raw = {name: kps.get(f"{side}_{name}", 0.0) for name in ("wrist", "elbow", "shoulder")}
+        check = PalmCheck(
+            track_id,
+            arm=side,
+            wrist_score=raw["wrist"].score if raw["wrist"] else 0.0,
+            elbow_score=raw["elbow"].score if raw["elbow"] else 0.0,
+            shoulder_score=raw["shoulder"].score if raw["shoulder"] else 0.0,
+        )
+        wrist = kps.get(f"{side}_wrist", min_score)
+        shoulder = kps.get(f"{side}_shoulder", min_score)
+        if wrist is None:
+            return 0, replace(check, reason=f"{side} wrist not visible")
+        if shoulder is None:
+            return 0, replace(check, reason=f"{side} shoulder not visible")
+
+        lift = (shoulder.y - wrist.y) / scale
+        check = replace(check, lift=lift)
+        if lift < self.cfg.raise_margin:
+            return 1, replace(check, reason="hand not raised above the shoulder")
+
+        elbow = kps.get(f"{side}_elbow", min_score)
+        if elbow is None:
+            return 2, replace(
+                check, reason=f"{side} elbow not visible (up close it is often below the frame)"
+            )
+        rise = elbow.y - wrist.y
+        run = abs(wrist.x - elbow.x)
+        tilt = math.degrees(math.atan2(run, rise))
+        length = math.hypot(run, rise) / scale
+        check = replace(check, forearm_tilt_deg=tilt, forearm_len=length)
+        if wrist.y >= elbow.y:
+            return 3, replace(check, reason="forearm points down")
+        if length < self.cfg.palm_min_forearm:
+            return 4, replace(
+                check, reason="forearm points at the camera, too foreshortened to judge"
+            )
+        if tilt > self.cfg.palm_max_tilt_deg:
+            return 5, replace(
+                check,
+                reason=(
+                    f"forearm {tilt:.0f} deg from vertical "
+                    f"(limit {self.cfg.palm_max_tilt_deg:.0f})"
+                ),
+            )
+        return 6, check
 
     def _palm_presented(self, kps: Keypoints | None) -> bool:
         """A raised hand with a roughly vertical forearm.

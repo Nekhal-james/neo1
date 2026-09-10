@@ -273,11 +273,6 @@ MAX_WAV_BYTES = 10 * 1024 * 1024
 """About ten minutes of 16 kHz mono. Generous for a room question; small enough
 that an upload cannot exhaust memory on a 4 GB Pi."""
 
-SPEAKER_CHUNK_BYTES = 2048
-"""Matches the test tone's chunking. Small enough that the browser can start
-playing quickly, large enough not to spend the event loop on framing."""
-
-
 @router.get("/api/audio/status")
 async def audio_status(request: Request, user: str = Depends(require_session)) -> dict:
     """Whether speech works, and if not, exactly why.
@@ -298,10 +293,11 @@ async def audio_status(request: Request, user: str = Depends(require_session)) -
 async def audio_say(request: Request, user: str = Depends(require_session)) -> dict:
     """Speak `text` through the panel's speaker channel.
 
-    This is the whole text-to-speech path end to end: Piper synthesizes, the
-    result is resampled to the speaker channel's rate, and it is pushed to
-    whichever browsers have the speaker connected. Nothing here is a mock, and
-    the same `intelligence.tts` code runs on the robot.
+    This is the whole text-to-speech path end to end: Piper synthesizes a
+    sentence at a time, each is resampled to the speaker channel's rate and
+    pushed as soon as it is ready, and the mic stops feeding the recognizer
+    until it has finished playing. Nothing here is a mock, and the same
+    `intelligence.tts` code runs on the robot.
     """
     payload = await request.json()
     text = str(payload.get("text", "")).strip()
@@ -310,11 +306,8 @@ async def audio_say(request: Request, user: str = Depends(require_session)) -> d
     if len(text) > MAX_SAY_CHARS:
         raise HTTPException(413, f"text must be under {MAX_SAY_CHARS} characters")
 
-    speech = request.app.state.speech
-    bridge = request.app.state.bridge
-
     try:
-        audio = await speech.say(text)
+        result = await request.app.state.voice.speak(text)
     except RuntimeError as exc:
         # A missing model or package is a configuration problem, not a crash:
         # 501 with the reason, which is what the panel renders.
@@ -323,19 +316,18 @@ async def audio_say(request: Request, user: str = Depends(require_session)) -> d
         log.exception("speech synthesis failed")
         raise HTTPException(502, f"speech synthesis failed: {exc}") from exc
 
-    for offset in range(0, len(audio.data), SPEAKER_CHUNK_BYTES):
-        await bridge.emit_audio_out(audio.data[offset : offset + SPEAKER_CHUNK_BYTES])
-
     return {
         "ok": True,
         "text": text,
-        "sample_rate": audio.sample_rate,
-        "duration_s": round(audio.duration_s, 3),
-        "bytes": len(audio.data),
+        "sample_rate": result.sample_rate,
+        "duration_s": round(result.duration_s, 3),
+        "bytes": result.bytes,
+        "sentences": result.sentences,
+        "first_audio_ms": round(result.first_audio_ms, 1),
         # False when nobody has the speaker channel open -- the audio was
-        # produced and dropped. Without this the panel would report success for
-        # something the operator never heard.
-        "speaker_connected": request.app.state.media.active("speaker"),
+        # synthesized but not queued. Without this the panel would report
+        # success for something the operator never heard.
+        "speaker_connected": result.speaker_connected,
     }
 
 
@@ -391,6 +383,60 @@ async def audio_reload(request: Request, user: str = Depends(require_session)) -
     speech.reload_config()
     await asyncio.to_thread(speech.refresh_availability)
     return asdict(speech.view(listening=request.app.state.media.active("mic")))
+
+
+# -- voice (the spoken conversation loop) -----------------------------------
+
+
+@router.get("/api/voice")
+async def voice_status(request: Request, user: str = Depends(require_session)) -> dict:
+    return asdict(request.app.state.voice.view())
+
+
+@router.post("/api/voice")
+async def voice_configure(request: Request, user: str = Depends(require_session)) -> dict:
+    """Switch answering out loud on or off.
+
+    Off by default and switched on only here. With it on, whatever the room
+    says to an open mic is sent to the model host -- a choice an operator makes,
+    not a side effect of opening a microphone.
+    """
+    payload = await request.json()
+    enabled = payload.get("enabled") if isinstance(payload, dict) else None
+    if not isinstance(enabled, bool):
+        raise HTTPException(400, 'body must be {"enabled": true} or {"enabled": false}')
+    voice = request.app.state.voice
+    voice.set_enabled(enabled)
+    return asdict(voice.view())
+
+
+@router.post("/api/voice/ask")
+async def voice_ask(request: Request, user: str = Depends(require_session)) -> dict:
+    """One spoken turn from typed text: ask the model, speak the reply.
+
+    Everything a voice turn does except the microphone -- so the loop can be
+    exercised and timed without anybody talking, and a typed question can be
+    answered out loud. Does not need answering switched on: typing the question
+    is already the explicit act that switch exists to require.
+
+    Returns once the reply has been pushed to the speaker, not once it has
+    finished playing.
+    """
+    payload = await request.json()
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        raise HTTPException(400, "text must not be empty")
+    if len(text) > MAX_PROMPT_CHARS:
+        raise HTTPException(413, f"text must be under {MAX_PROMPT_CHARS} characters")
+
+    voice = request.app.state.voice
+    if voice.busy:
+        raise HTTPException(409, "Neo is already answering; ask again when it has finished")
+    try:
+        turn = await voice.run_turn(text)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return asdict(turn)
 
 
 # -- link (model-conn's host/receiver connection) --------------------------

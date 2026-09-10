@@ -357,3 +357,67 @@ def test_transcript_engines_match(bridge_types):
     ros = {k.removeprefix("ENGINE_").lower()
            for k in msg_consts("Transcript") if k.startswith("ENGINE_")}
     assert ros == {"vosk", "whisper"}
+
+
+# ---------------------------------------------------------------------------
+# Generation hazards.
+#
+# Both of these shipped and were only caught by an actual `colcon build`. They
+# are cheap to check as text, so they belong here rather than being findable
+# only on a machine with Jazzy installed -- which is the whole premise of this
+# file.
+# ---------------------------------------------------------------------------
+
+
+def test_comments_cannot_close_a_c_block_comment():
+    """rosidl copies `.msg` comments verbatim into generated C block comments.
+
+    A star-slash sequence anywhere in one closes that comment early, and the
+    generated header then fails to compile with errors pointing at the *build*
+    directory -- nothing names the `.msg` that caused it. `SourceState.msg`
+    documented the source-mux rule using glob syntax and did exactly this.
+    """
+    offenders = [
+        f"{path.name}:{i}"
+        for path in sorted(list(MSG_DIR.glob("*.msg")) + list(SRV_DIR.glob("*.srv")))
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if "*/" in line
+    ]
+    assert not offenders, (
+        "these close the generated C block comment early: " + ", ".join(offenders)
+    )
+
+
+def test_package_xml_is_well_formed():
+    """`--` is illegal inside an XML comment, and the house style uses it as an
+    em-dash everywhere else.
+
+    Both ROS packages shipped with an unparseable manifest this way. rosdep and
+    colcon both fail on it, but only once something actually builds the package.
+    """
+    import xml.dom.minidom
+
+    for manifest in sorted((PKG.parent).glob("*/package.xml")):
+        try:
+            xml.dom.minidom.parse(str(manifest))
+        except Exception as exc:  # noqa: BLE001 -- report which file and why
+            raise AssertionError(f"{manifest} is not well-formed XML: {exc}") from exc
+
+
+def test_colcon_would_find_the_ros_packages():
+    """A bare `colcon build` from the repo root finds nothing.
+
+    The root `setup.py` makes colcon identify the root itself as a single
+    Python package, so it never descends into `src/`: it reports "0 packages
+    finished" and exits 0. That green-but-empty build is why the two failures
+    above reached a pushed branch, so the invocation that avoids it is pinned
+    both here and in the CI workflow.
+    """
+    repo = PKG.parents[1]
+    assert (repo / "setup.py").exists(), (
+        "the shadowing root setup.py is gone; if colcon can now discover src/ "
+        "on its own, drop --base-paths from CI and delete this test"
+    )
+    ci = (repo / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "colcon build --base-paths src" in ci
+    assert "colcon test --base-paths src" in ci

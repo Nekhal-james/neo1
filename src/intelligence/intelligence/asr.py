@@ -27,9 +27,8 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
-from pathlib import Path
 
-from .config import Config
+from .config import Config, resolve_path
 
 log = logging.getLogger("intelligence.asr")
 
@@ -82,17 +81,21 @@ def availability(cfg: Config) -> Availability:
             "model directory in config/intelligence.local.yaml",
             model_path="",
         )
-    if not Path(path).exists():
-        return Availability(False, f"vosk model not found: {path}", model_path=path)
+    # Relative to the repo root, not the working directory -- see resolve_path.
+    resolved = resolve_path(path)
+    if not resolved.exists():
+        return Availability(
+            False, f"vosk model not found: {resolved}", model_path=str(resolved)
+        )
     try:
         import vosk  # noqa: F401
     except ImportError:
         return Availability(
             False,
             "vosk not installed -- pip install -e '.[voice]' from the repo root",
-            model_path=path,
+            model_path=str(resolved),
         )
-    return Availability(True, model_path=path)
+    return Availability(True, model_path=str(resolved))
 
 
 def _load_model(cfg: Config):
@@ -107,7 +110,7 @@ def _load_model(cfg: Config):
             "asr.vosk_model_path is not configured -- set it in "
             "config/intelligence.local.yaml to a downloaded Vosk model directory"
         )
-    model_path = Path(cfg.asr.vosk_model_path)
+    model_path = resolve_path(cfg.asr.vosk_model_path)
     if not model_path.exists():
         raise RuntimeError(f"vosk model not found: {model_path}")
 

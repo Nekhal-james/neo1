@@ -119,12 +119,8 @@ def person(
 ) -> Detection:
     half_w = scale * 0.5
     bbox = BBox(cx - half_w, cy - scale * 0.9, cx + half_w, cy + scale * 1.9)
-    return Detection(
-        bbox=bbox,
-        score=score,
-        label="person",
-        class_id=0,
-        keypoints=make_keypoints(
+    kps = (
+        make_keypoints(
             cx=cx,
             cy=cy,
             scale=scale,
@@ -135,7 +131,18 @@ def person(
             facing=facing,
         )
         if with_pose
-        else None,
+        else None
+    )
+    return Detection(
+        bbox=bbox,
+        score=score,
+        label="person",
+        class_id=0,
+        keypoints=kps,
+        # Set here for the same reason the real detector sets it: the pipeline
+        # tracks heads, so a fixture without one would exercise the fallback
+        # path instead of the real one.
+        head_bbox=kps.head_box(bbox) if kps else None,
     )
 
 

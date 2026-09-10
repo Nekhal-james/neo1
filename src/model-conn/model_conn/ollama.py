@@ -92,6 +92,37 @@ def ensure_model(model_path_or_name: str, *, port: int) -> str:
     return name
 
 
+def warm(model_name: str, *, port: int, keep_alive_minutes: int,
+         timeout_s: float = 180.0) -> float | None:
+    """Load the model into memory now, so the first real question does not.
+
+    Ollama loads a model lazily on first use, and a 3B load costs ~45 s. Doing
+    that lazily means whoever asks Neo the first question after a quiet spell
+    waits three quarters of a minute or, more likely, times out and gets the
+    degraded reply. A reception desk is quiet most of the time, so that is not
+    an edge case -- it is the common path.
+
+    An empty prompt with `keep_alive` set is Ollama's documented way to load a
+    model without generating anything. Returns the load time in seconds, or
+    None if warming failed -- which is never fatal: a cold model still answers,
+    just slowly.
+    """
+    import requests
+
+    try:
+        started = time.monotonic()
+        resp = requests.post(
+            f"http://127.0.0.1:{port}/api/generate",
+            json={"model": model_name, "keep_alive": f"{int(keep_alive_minutes)}m"},
+            timeout=(2.0, timeout_s),
+        )
+        resp.raise_for_status()
+        return time.monotonic() - started
+    except Exception as exc:  # noqa: BLE001 -- warming is an optimisation
+        log.warning("could not pre-load %s: %s", model_name, exc)
+        return None
+
+
 def up(cfg: Config, model_override: str | None) -> int:
     """`neo [--model PATH] up` -- resolve the model, ensure Ollama is serving it
     (behind the mTLS proxy when tls.enabled), print the endpoint, and block
@@ -139,6 +170,18 @@ def up(cfg: Config, model_override: str | None) -> int:
     except OllamaError as exc:
         print(f"[model-conn] {exc}")
         return 1
+
+    # Warm before announcing the endpoint: once the endpoint is printed the
+    # thing is advertised as ready, and a model that takes 45 s to answer its
+    # first question is not ready.
+    held = warm(
+        model_name, port=ollama_port, keep_alive_minutes=cfg.host.idle_unload_minutes
+    )
+    if held is not None:
+        print(
+            f"[model-conn] pre-loaded '{model_name}' in {held:.1f}s; "
+            f"holding it for {cfg.host.idle_unload_minutes} min of idle"
+        )
 
     if cfg.tls.enabled:
         from .tls_proxy import start_proxy_thread
