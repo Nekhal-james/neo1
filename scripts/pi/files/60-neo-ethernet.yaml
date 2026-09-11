@@ -1,0 +1,20 @@
+# Neo: the direct Ethernet link to the laptop (plan Phase 0, step 4).
+#
+# A fixed address, so the laptop has a stable peer to dial and the link config
+# (config/model_conn.local.yaml) has something to point at. DHCP stays on
+# alongside it: if the laptop shares its internet over this same cable
+# (Windows Internet Connection Sharing), the Pi still picks that up.
+#
+# `optional: true` so boot does not wait on a cable that is not plugged in.
+# netplan already gives Ethernet a better route metric (100) than Wi-Fi (600),
+# which is the "prefer Ethernet when both are up" rule from the plan.
+#
+# @ETH_ADDRESS@ is filled in by scripts/pi/setup-system.sh.
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: true
+      optional: true
+      addresses:
+        - @ETH_ADDRESS@

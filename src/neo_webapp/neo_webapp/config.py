@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,8 @@ class AuthConfig:
     username: str = "admin"
     password_hash: str = ""
     session_secret: str = ""
+    recovery_hash: str = ""
+    """argon2 hash of the one-time recovery code; empty means none is set."""
     session_max_age_s: int = 43200
     max_attempts: int = 5
     lockout_window_s: int = 300
@@ -90,6 +93,11 @@ class Config:
     bridge_backend: str = "auto"
     source_path: Path | None = None
 
+    secrets_path: Path | None = None
+    """The file a password change is written to: the one this config's secrets
+    are read back from on the next start. None for a config built in code, which
+    then cannot change its password from the panel."""
+
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
         layers = _config_layers(path)
@@ -98,6 +106,10 @@ class Config:
             raw = _deep_merge(raw, yaml.safe_load(layer.read_text(encoding="utf-8")) or {})
         cfg = cls._from_raw(raw)
         cfg.source_path = layers[-1] if layers else None
+        # A named file is the whole config, so it is where the hash lives.
+        # Otherwise the gitignored local file -- never the committed one.
+        named = path or os.environ.get("NEO_WEBAPP_CONFIG")
+        cfg.secrets_path = Path(named) if named else LOCAL_CONFIG
         return cfg
 
     @classmethod
@@ -121,6 +133,7 @@ class Config:
                 username=auth_raw.get("username", "admin"),
                 password_hash=auth_raw.get("password_hash", ""),
                 session_secret=auth_raw.get("session_secret", ""),
+                recovery_hash=auth_raw.get("recovery_hash", ""),
                 session_max_age_s=int(auth_raw.get("session_max_age_s", 43200)),
                 max_attempts=int(auth_raw.get("max_attempts", 5)),
                 lockout_window_s=int(auth_raw.get("lockout_window_s", 300)),
@@ -172,18 +185,27 @@ def _resolve(p: str | Path) -> Path:
     return path if path.is_absolute() else (REPO_ROOT / path)
 
 
-def write_local(updates: dict[str, Any]) -> Path:
-    """Merge `updates` into config/webapp.local.yaml, creating it if needed."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+def write_local(updates: dict[str, Any], path: Path | None = None) -> Path:
+    """Merge `updates` into config/webapp.local.yaml (or `path`), creating it if needed.
+
+    Atomic: this file holds the only copy of the password hash, and a write torn
+    by a power cut on an SD card would lock the operator out of the panel.
+    """
+    target = Path(path) if path is not None else LOCAL_CONFIG
+    target.parent.mkdir(parents=True, exist_ok=True)
     existing: dict[str, Any] = {}
-    if LOCAL_CONFIG.exists():
-        existing = yaml.safe_load(LOCAL_CONFIG.read_text(encoding="utf-8")) or {}
+    if target.exists():
+        existing = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
     merged = _deep_merge(existing, updates)
-    LOCAL_CONFIG.write_text(
-        yaml.safe_dump(merged, sort_keys=False, default_flow_style=False),
-        encoding="utf-8",
-    )
-    return LOCAL_CONFIG
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(merged, fh, sort_keys=False, default_flow_style=False)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return target
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:

@@ -8,6 +8,7 @@
 </head>
 <body>
   <div class="login-wrap">
+    <!-- Sign in -->
     <form class="login-card" id="form">
       <h1>N E O</h1>
       <div class="sub">admin panel</div>
@@ -20,13 +21,78 @@
 
       <button class="primary" type="submit" id="submit">Sign in</button>
       <div class="error" id="error"></div>
+      <div class="hint"><a href="#" id="show-forgot">Forgot password?</a></div>
     </form>
+
+    <!-- Forgot password -->
+    <form class="login-card" id="forgot" hidden>
+      <h1>N E O</h1>
+      <div class="sub">reset the password</div>
+
+      <p class="login-help">
+        Enter the recovery code you were given when the password was set, and
+        choose a new password.
+      </p>
+
+      <label for="recovery-code">Recovery code</label>
+      <input id="recovery-code" type="text" autocomplete="off" spellcheck="false"
+             placeholder="XXXXX-XXXXX-XXXXX-XXXXX" required>
+
+      <label for="new-password">New password</label>
+      <input id="new-password" type="password" autocomplete="new-password" minlength="10" required>
+
+      <label for="confirm-password">New password again</label>
+      <input id="confirm-password" type="password" autocomplete="new-password" minlength="10" required>
+
+      <button class="primary" type="submit" id="reset-submit">Reset password</button>
+      <div class="error" id="reset-error"></div>
+      <div class="hint">
+        No recovery code? On the robot, run <code>neo --webapp setup</code>.<br>
+        <a href="#" id="show-signin">Back to sign in</a>
+      </div>
+    </form>
+
+    <!-- The replacement recovery code, shown once -->
+    <div class="login-card" id="new-code" hidden>
+      <h1>N E O</h1>
+      <div class="sub">password reset</div>
+      <p class="login-help">
+        You are signed in, and every other browser has been signed out. The code
+        you used no longer works. This is your new recovery code, and it will not
+        be shown again:
+      </p>
+      <div class="recovery-code" id="new-code-value"></div>
+      <p class="login-help">Write it down or save it somewhere away from the robot.</p>
+      <button class="primary" type="button" id="continue">I have saved it — continue</button>
+    </div>
   </div>
 
   <script>
-    const form = document.getElementById('form');
-    const errorEl = document.getElementById('error');
-    const submit = document.getElementById('submit');
+    const $ = (id) => document.getElementById(id);
+    const form = $('form');
+    const forgot = $('forgot');
+    const errorEl = $('error');
+    const submit = $('submit');
+
+    function show(which) {
+      form.hidden = which !== 'signin';
+      forgot.hidden = which !== 'forgot';
+      $('new-code').hidden = which !== 'code';
+    }
+
+    $('show-forgot').addEventListener('click', (e) => {
+      e.preventDefault();
+      $('reset-error').textContent = '';
+      show('forgot');
+      $('recovery-code').focus();
+    });
+
+    $('show-signin').addEventListener('click', (e) => {
+      e.preventDefault();
+      forgot.reset();
+      show('signin');
+      $('password').focus();
+    });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -37,8 +103,8 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            username: document.getElementById('username').value,
-            password: document.getElementById('password').value,
+            username: $('username').value,
+            password: $('password').value,
           }),
         });
         if (res.ok) {
@@ -53,6 +119,42 @@
         submit.disabled = false;
       }
     });
+
+    forgot.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = $('reset-error');
+      err.textContent = '';
+      if ($('new-password').value !== $('confirm-password').value) {
+        err.textContent = 'The two new passwords do not match.';
+        return;
+      }
+      const btn = $('reset-submit');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/recover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recovery_code: $('recovery-code').value,
+            new_password: $('new-password').value,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          err.textContent = body.detail || `reset failed (${res.status})`;
+          return;
+        }
+        forgot.reset();
+        $('new-code-value').textContent = body.recovery_code;
+        show('code');
+      } catch {
+        err.textContent = 'cannot reach the panel';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $('continue').addEventListener('click', () => { window.location = '/'; });
   </script>
 </body>
 </html>

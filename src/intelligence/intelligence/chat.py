@@ -7,8 +7,11 @@ Resolution order:
    testing case `neo --prompt` is meant to cover (dev laptop running both
    `neo --model ... up` and `neo --prompt ...`).
 
-No reachable endpoint is not an error: it returns a degraded-mode reply, per
-CLAUDE.md's "degraded mode is the normal operating state, not an error path".
+No reachable endpoint is not an error: it answers from the campus directory when
+the question is one it can answer, and otherwise returns the degraded-mode
+reply, per CLAUDE.md's "degraded mode is the normal operating state, not an
+error path". Either way the model, when present, sees only the directory entries
+the question matched (`retrieval.py`), never the whole dataset.
 Every call writes the result to status_store so the admin panel can show it.
 """
 
@@ -139,9 +142,35 @@ def chat_transport_for(mc_cfg: ModelConnConfig) -> ChatTransport:
 @dataclass
 class ChatResult:
     reply: str
-    source: str  # "ollama" | "degraded"
+    source: str  # "ollama" | "kb" | "degraded"
     host: str = ""
     latency_ms: float = 0.0
+
+
+@dataclass
+class CampusLookup:
+    context: str
+    """The "Campus directory" section for the system prompt."""
+
+    offline_reply: str | None
+    """What to say from the directory alone when no model host answers."""
+
+
+def campus_lookup(text: str, cfg: Config) -> CampusLookup:
+    """Look the question up in the campus dataset. Never raises.
+
+    Read from disk on every question (cached until a file changes), so a room
+    saved in the admin panel is answerable by the next question.
+    """
+    try:
+        from . import campus, retrieval
+
+        ds = campus.load_dataset(cfg.rag_data_path)
+        found = retrieval.retrieve(text, ds)
+        return CampusLookup(retrieval.context(ds, found), retrieval.offline_reply(ds, found))
+    except Exception:  # noqa: BLE001 -- a broken data file must not cost the answer
+        log.warning("campus lookup failed", exc_info=True)
+        return CampusLookup("", None)
 
 
 def vision_context() -> str:
@@ -171,17 +200,24 @@ def ask(
     transport: ChatTransport | None = None,
     probe_transport=None,
     vision: str | None = None,
+    campus: CampusLookup | None = None,
 ) -> ChatResult:
     """`probe_transport` overrides model_conn.link's default HTTP probe --
     exposed only so tests can fake endpoint reachability without touching a
     socket; production code never passes it.
 
-    `vision` overrides the camera context line for the same reason.
+    `vision` overrides the camera context line for the same reason, and
+    `campus` the directory lookup.
     """
     if not cfg.chat.model_name:
         log.warning("chat.model_name is not configured; the request will likely 404")
 
     system = load_system_prompt(cfg)
+    lookup = campus_lookup(text, cfg) if campus is None else campus
+    if lookup.context:
+        # System prompt, not the user's message, for the same reason as the
+        # camera line below: it is looked-up fact, not something the person said.
+        system = f"{system}\n\n{lookup.context}"
     seen = vision_context() if vision is None else vision
     if seen:
         # Appended to the system prompt rather than the user's message so the
@@ -206,7 +242,12 @@ def ask(
         except Exception as exc:  # noqa: BLE001 -- any failure here means degraded
             log.warning("chat request to %s:%d failed: %s", host, port, exc)
 
-    result = ChatResult(reply=DEGRADED_REPLY, source="degraded")
+    if lookup.offline_reply:
+        # The info-desk role works with no model at all (CLAUDE.md): a question
+        # the directory can answer gets that answer, not an apology.
+        result = ChatResult(reply=lookup.offline_reply, source="kb")
+    else:
+        result = ChatResult(reply=DEGRADED_REPLY, source="degraded")
     _write(cfg, text, result)
     return result
 

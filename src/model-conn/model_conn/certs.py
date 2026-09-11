@@ -265,16 +265,52 @@ def panel_hostnames_and_ips() -> tuple[list[str], list[str]]:
     """
     import socket
 
-    hostnames = {"localhost", "neo", "neo.local", socket.gethostname()}
+    hostname = socket.gethostname()
+    hostnames = {"localhost", "neo", "neo.local", hostname}
+    # How a browser on the same network actually reaches a Pi running avahi. The
+    # robot is `neo-pi`, and a certificate naming only `neo-pi` does not match
+    # https://neo-pi.local -- the phone just refuses the panel.
+    if hostname and hostname != "localhost" and not hostname.endswith(".local"):
+        hostnames.add(f"{hostname}.local")
     ips = {"127.0.0.1"}
     try:
-        for info in socket.getaddrinfo(socket.gethostname(), None):
+        for info in socket.getaddrinfo(hostname, None):
             addr = info[4][0]
             if ":" not in addr:  # IPv4 only
                 ips.add(addr)
     except OSError:
         pass
+    # On Ubuntu the hostname lookup above yields 127.0.1.1 from /etc/hosts, which
+    # no other device will ever dial. The interfaces are where the real addresses
+    # are -- including the static one on the cable to the laptop.
+    ips.update(_interface_ipv4s())
     return sorted(hostnames), sorted(ips)
+
+
+def _interface_ipv4s() -> set[str]:
+    """Every non-loopback IPv4 address on this machine's interfaces, best effort.
+
+    `hostname -I` on Linux, which is where the panel runs. Anywhere it is missing
+    or refuses (Windows, macOS), this returns nothing and the certificate falls
+    back to the hostname lookup alone -- never an error.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["hostname", "-I"], capture_output=True, text=True, timeout=5, check=True
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    found = set()
+    for token in out.split():
+        try:
+            addr = ipaddress.ip_address(token)
+        except ValueError:
+            continue
+        if addr.version == 4 and not addr.is_loopback:
+            found.add(str(addr))
+    return found
 
 
 def local_hostnames_and_ips() -> tuple[list[str], list[str]]:

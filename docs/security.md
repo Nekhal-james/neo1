@@ -30,7 +30,8 @@ Pi itself. TLS here is a functional requirement, not just a safety one.
                           receiver"
   on the LAPTOP           on the PI              on the PI
   SAN: eth IP +           no SAN (never          SAN: neo, neo.local,
-       neo-brain.local     matched by name)           the Pi's IPs
+       neo-brain.local     matched by name)           neo-pi, neo-pi.local,
+                                                      the Pi's IPs
   10 years                10 years               397 days
        |                      |                      |
        +------ mutual TLS ----+                      |
@@ -86,7 +87,7 @@ It writes, all under `certs/model_conn/`:
 
 ```bash
 scp certs/model_conn/{ca-cert.pem,client-cert.pem,client-key.pem} \
-    neo:~/neo1/certs/model_conn/
+    neo@neo-pi.local:~/neo1/certs/model_conn/
 ```
 
 The server certificate and key stay on the laptop. `ca-key.pem` stays on the
@@ -120,6 +121,12 @@ Signing needs the CA key, so pick one:
 ```bash
 neo --tls panel
 ```
+
+Run it **after** the Pi's first reboot following `scripts/pi/setup-system.sh`.
+The certificate names the machine's hostname and `<hostname>.local`, plus every
+IPv4 address on its interfaces — so the static `192.168.50.2` on the laptop
+cable is only included once that address exists. See
+[pi-setup.md](pi-setup.md).
 
 Then point the panel at it, in `config/webapp.local.yaml`:
 
@@ -163,6 +170,25 @@ One admin account: argon2 password hash and the session secret land in
 `config/webapp.local.yaml`, which is gitignored. There is no multi-user or role
 support and none is planned — one operator, one account.
 
+`neo --webapp setup` also prints a **recovery code**, once. Keep it somewhere
+away from the robot.
+
+- **Changing the password**, signed in: **Password** in the panel's header. It
+  asks for the current password (wrong guesses count toward the login lockout)
+  and saving rotates the session secret, which signs out every other browser.
+  The same dialog makes a new recovery code, replacing the old one, and also
+  needs the current password.
+- **Forgot the password**: **Forgot password?** on the sign-in page. Enter the
+  recovery code and a new password. The code works once; a replacement is
+  shown on the spot, every other browser is signed out, and you are signed in.
+
+Why a code and not a reset link: the robot has no email to send one with, and a
+reset that needed less than a secret only the owner holds would let anyone who
+can reach the panel on the campus network take over a robot that moves and
+talks. Codes are about 100 bits of randomness, stored only as argon2 hashes, and
+a wrong one counts as a failed login. Lost the code too? `neo --webapp setup`
+from a shell on the robot still resets everything.
+
 Defaults in `config/webapp.yaml`: 12-hour sessions, 5 failed attempts, 5-minute
 lockout window. The session cookie is `Secure` + `HttpOnly` + `SameSite`, which
 is another reason HTTPS is not optional: a `Secure` cookie is simply not set over
@@ -205,7 +231,7 @@ curl --cacert certs/model_conn/ca-cert.pem \
      https://neo-brain.local:11434/api/tags
 
 # The panel, from a machine with the CA installed. No -k, no warning.
-curl https://neo.local:8443/api/health
+curl https://neo-pi.local:8443/api/health
 ```
 
 The second command is the one that matters. If it succeeds, the service is
@@ -235,7 +261,7 @@ Two things worth knowing about the network itself, both from the plan's Phase 0:
 | Laptop changed address or name | `neo --tls init` on the laptop, re-copy the client cert/key to the Pi. |
 | CA key exposed | Delete `certs/`, `neo --tls init`, `neo --tls panel`, re-copy everything, reinstall the CA on every device. There is no revocation here — reissuing the CA is the revocation. |
 | Pi lost or stolen | Same as above. The client certificate on it is valid until the CA is replaced. |
-| Locked out of the panel | `neo --webapp setup` again from a shell on the Pi. It overwrites the stored hash. |
+| Forgot the panel password | **Forgot password?** on the sign-in page, with the recovery code. No code: `neo --webapp setup` again from a shell on the Pi, which overwrites the hash and prints a new code. |
 
 There is deliberately no CRL or OCSP. For three certificates under one person's
 control, replacing the CA is simpler and harder to get wrong than running

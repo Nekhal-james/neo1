@@ -405,6 +405,7 @@ $('tabs').addEventListener('click', (e) => {
   // handshake takes longer than a quick flick of the stick, and a control that
   // silently drops the first input is worse than one that takes a moment to arm.
   if (btn.dataset.tab === 'head') joyConnect(); else joyDisconnect();
+  if (btn.dataset.tab === 'data' && !campus.loaded) loadCampus();
 });
 
 // ---------------------------------------------------------------- commands
@@ -435,6 +436,115 @@ $('btn-tone').addEventListener('click', () => post('/api/media/test-tone'));
 $('btn-logout').addEventListener('click', async () => {
   await post('/api/auth/logout');
   window.location = '/login';
+});
+
+// ------------------------------------------------------------- password
+
+const pwDialog = $('password-dialog');
+
+function resetPasswordDialog() {
+  $('password-form').reset();
+  $('pw-error').textContent = '';
+  $('pw-recovery-code').hidden = true;
+  $('pw-recovery-code').textContent = '';
+  $('pw-recovery-note').hidden = true;
+}
+
+function closePasswordDialog() {
+  resetPasswordDialog();
+  pwDialog.close();
+}
+
+async function loadRecoveryStatus() {
+  const el = $('v-recovery');
+  try {
+    const res = await fetch('/api/auth/recovery');
+    if (!res.ok) { el.textContent = '—'; return; }
+    const { configured } = await res.json();
+    el.textContent = configured ? 'set' : 'not set';
+    el.style.color = configured ? 'var(--good)' : 'var(--warn)';
+  } catch { el.textContent = '—'; }
+}
+
+$('btn-password').addEventListener('click', () => {
+  resetPasswordDialog();
+  loadRecoveryStatus();
+  pwDialog.showModal();
+  $('pw-current').focus();
+});
+
+$('pw-recovery').addEventListener('click', async () => {
+  const err = $('pw-error');
+  err.style.color = '';
+  const current = $('pw-current').value;
+  if (!current) {
+    err.textContent = 'Enter the current password first.';
+    $('pw-current').focus();
+    return;
+  }
+  const btn = $('pw-recovery');
+  btn.disabled = true;
+  err.textContent = '';
+  try {
+    const res = await fetch('/api/auth/recovery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: current }),
+    });
+    if (res.status === 401) { window.location = '/login'; return; }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      err.textContent = body.detail || `could not make a recovery code (${res.status})`;
+      return;
+    }
+    $('pw-current').value = '';
+    $('pw-recovery-code').textContent = body.recovery_code;
+    $('pw-recovery-code').hidden = false;
+    $('pw-recovery-note').hidden = false;
+    loadRecoveryStatus();
+  } catch {
+    err.textContent = 'could not reach the panel';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('pw-cancel').addEventListener('click', closePasswordDialog);
+
+$('password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const err = $('pw-error');
+  const current = $('pw-current').value;
+  const next = $('pw-new').value;
+  err.style.color = '';
+  if (next !== $('pw-confirm').value) {
+    err.textContent = 'The two new passwords do not match.';
+    return;
+  }
+  const btn = $('pw-submit');
+  btn.disabled = true;
+  err.textContent = '';
+  try {
+    const res = await fetch('/api/auth/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    if (res.status === 401) { window.location = '/login'; return; }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      err.textContent = body.detail || `could not change the password (${res.status})`;
+      return;
+    }
+    $('password-form').reset();
+    err.style.color = 'var(--good)';
+    err.textContent = 'Password changed. Other browsers have been signed out.';
+    setTimeout(closePasswordDialog, 1800);
+  } catch {
+    err.textContent = 'could not reach the panel';
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // -------------------------------------------------------------- joystick
@@ -856,6 +966,293 @@ $('btn-ask-voice').addEventListener('click', async () => {
     btn.disabled = false;
     askBtn.disabled = false;
   }
+});
+
+// ------------------------------------------------------------------ data
+
+// The campus files are edited as text and saved verbatim. Each file keeps its
+// own draft, so switching between Rooms, Graph and Coverage never loses an edit,
+// and `modifiedNs` is the version a draft started from: the server refuses a
+// save over a file that changed underneath it.
+const campus = {
+  loaded: false,
+  file: 'rooms',
+  saved: {},      // file -> text on disk
+  modifiedNs: {}, // file -> version the draft is based on
+  drafts: {},     // file -> text in the editor
+  samples: {},
+};
+
+const ROOM_TEMPLATE = `
+- code:
+  name:
+  type: classroom
+  block:
+  floor: 0
+  aliases: []
+  landmarks: []
+`;
+
+const editor = $('campus-editor');
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function campusDirty(file) {
+  return (campus.drafts[file] ?? '') !== (campus.saved[file] ?? '');
+}
+
+// Reads every file from disk. A draft with unsaved edits is kept unless
+// `discard` names its file -- that is what Revert does.
+async function loadCampus(discard) {
+  if (campus.loaded) campus.drafts[campus.file] = editor.value;
+  const res = await fetch('/api/campus');
+  if (res.status === 401) { window.location = '/login'; return; }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    $('campus-state').textContent = body.detail || `could not load (${res.status})`;
+    return;
+  }
+  campus.samples = body.samples;
+  for (const [name, f] of Object.entries(body.files)) {
+    const keep = campus.loaded && name !== discard && campusDirty(name);
+    campus.saved[name] = f.text;
+    campus.modifiedNs[name] = f.modified_ns;
+    if (!keep) campus.drafts[name] = f.text;
+  }
+  campus.loaded = true;
+  showCampusFile(campus.file, false);
+  renderCampusSummary(body.summary);
+  renderCampusIssues(body);
+}
+
+function showCampusFile(file, stashCurrent = true) {
+  if (stashCurrent) campus.drafts[campus.file] = editor.value;
+  campus.file = file;
+  editor.value = campus.drafts[file] ?? '';
+  document.querySelectorAll('#campus-files button').forEach((b) =>
+    b.classList.toggle('on', b.dataset.file === file));
+  document.querySelectorAll('.format').forEach((f) => { f.hidden = f.id !== `format-${file}`; });
+  $('campus-sample').textContent = campus.samples[file] || '';
+  $('btn-campus-template').hidden = file !== 'rooms';
+  updateCampusState();
+}
+
+function updateCampusState() {
+  campus.drafts[campus.file] = editor.value;
+  const state = $('campus-state');
+  const dirty = campusDirty(campus.file);
+  const others = ['rooms', 'graph', 'coverage'].filter((f) => f !== campus.file && campusDirty(f));
+  state.textContent = `${campus.file}.yaml · ${dirty ? 'unsaved changes' : (campus.modifiedNs[campus.file] ? 'saved' : 'not created yet')}`
+    + (others.length ? ` · also unsaved: ${others.join(', ')}` : '');
+  state.style.color = dirty ? 'var(--warn)' : '';
+  $('btn-campus-example').disabled = editor.value.trim() !== '';
+}
+
+function renderCampusSummary(s) {
+  if (!s) return;
+  $('v-campus-rooms').textContent = String(s.rooms);
+  $('v-campus-graph').textContent = s.nodes ? `${s.nodes} nodes, ${s.edges} edges` : 'none';
+  const tbody = $('campus-coverage').querySelector('tbody');
+  tbody.replaceChildren();
+  if (!s.blocks.length) {
+    const tr = el('tr');
+    const td = el('td', 'muted', 'No blocks yet.');
+    td.colSpan = 4;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  const label = { complete: 'complete', partial: 'partial', not_surveyed: 'not surveyed', unlisted: 'not in coverage' };
+  for (const b of s.blocks) {
+    const tr = el('tr');
+    tr.appendChild(el('td', '', b.block));
+    tr.appendChild(el('td', `st-${b.status}`, label[b.status] || b.status));
+    tr.appendChild(el('td', '', b.floors.length ? b.floors.join(', ') : '—'));
+    tr.appendChild(el('td', '', String(b.rooms)));
+    tbody.appendChild(tr);
+  }
+}
+
+// Issues for every file are shown, not just the open one: saving rooms.yaml is
+// checked against the graph and coverage too, and a problem there blocks it.
+function renderCampusIssues(result, headline) {
+  const list = $('campus-issues');
+  list.replaceChildren();
+  if (headline) list.appendChild(el('li', result.ok ? 'ok' : 'err', headline));
+  const items = [...(result.errors || []), ...(result.warnings || [])];
+  for (const i of items) {
+    const li = el('li', i.severity === 'error' ? 'err' : 'warn');
+    const where = `${i.file}.yaml · ${i.where}${i.line ? ` · line ${i.line}` : ''}`;
+    li.appendChild(el('span', 'where', where));
+    li.appendChild(document.createTextNode(i.message));
+    if (i.line) {
+      li.classList.add('jump');
+      li.title = 'Go to this line';
+      li.addEventListener('click', () => {
+        if (campus.file !== i.file) showCampusFile(i.file);
+        jumpToLine(i.line);
+      });
+    }
+    list.appendChild(li);
+  }
+}
+
+function jumpToLine(line) {
+  const lines = editor.value.split('\n');
+  const start = lines.slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0);
+  editor.focus();
+  editor.setSelectionRange(start, start + (lines[line - 1] || '').length);
+  const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 18;
+  editor.scrollTop = Math.max(0, (line - 4) * lineHeight);
+}
+
+async function campusPost(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) { window.location = '/login'; return null; }
+  return { res, body: await res.json().catch(() => ({})) };
+}
+
+$('campus-files').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (btn) showCampusFile(btn.dataset.file);
+});
+
+editor.addEventListener('input', updateCampusState);
+editor.addEventListener('keydown', (e) => {
+  // YAML is indented with spaces; a Tab that leaves the editor is useless here.
+  if (e.key === 'Tab' && !e.shiftKey) {
+    e.preventDefault();
+    editor.setRangeText('  ', editor.selectionStart, editor.selectionEnd, 'end');
+    updateCampusState();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveCampus();
+  }
+});
+
+$('btn-campus-validate').addEventListener('click', async () => {
+  const out = await campusPost('/api/campus/validate', { file: campus.file, text: editor.value });
+  if (!out) return;
+  if (!out.res.ok) {
+    renderCampusIssues({ ok: false }, out.body.detail || `check failed (${out.res.status})`);
+    return;
+  }
+  const n = out.body.errors.length, w = out.body.warnings.length;
+  renderCampusIssues(out.body, n ? `${n} error${n === 1 ? '' : 's'} — fix before saving`
+    : w ? `No errors, ${w} warning${w === 1 ? '' : 's'}` : 'No problems found');
+  renderCampusSummary(out.body.summary);
+});
+
+async function saveCampus() {
+  const file = campus.file;
+  const text = editor.value;
+  const btn = $('btn-campus-save');
+  btn.disabled = true;
+  try {
+    const out = await campusPost('/api/campus/save', { file, text, modified_ns: campus.modifiedNs[file] });
+    if (!out) return;
+    const { res, body } = out;
+    if (!res.ok) {
+      const d = body.detail;
+      if (d && typeof d === 'object') renderCampusIssues(d, d.message);
+      else renderCampusIssues({ ok: false }, d || `save failed (${res.status})`);
+      return;
+    }
+    campus.saved[file] = text;
+    campus.modifiedNs[file] = body.modified_ns;
+    const w = body.warnings.length;
+    renderCampusIssues(body, `Saved ${file}.yaml at ${new Date().toLocaleTimeString()}`
+      + (body.backup ? ', previous version backed up' : '')
+      + (w ? ` · ${w} warning${w === 1 ? '' : 's'}` : ''));
+    renderCampusSummary(body.summary);
+  } finally {
+    btn.disabled = false;
+    updateCampusState();
+  }
+}
+
+$('btn-campus-save').addEventListener('click', saveCampus);
+
+// Reloads the open file from disk, so it is also how to pick up a version
+// someone else saved.
+$('btn-campus-revert').addEventListener('click', async () => {
+  campus.drafts[campus.file] = editor.value;
+  if (campusDirty(campus.file) && !confirm(`Discard your changes to ${campus.file}.yaml and reload it?`)) return;
+  await loadCampus(campus.file);
+});
+
+$('btn-campus-template').addEventListener('click', () => {
+  const text = editor.value.replace(/\s*$/, '\n');
+  editor.value = (text.trim() ? text : '') + ROOM_TEMPLATE;
+  updateCampusState();
+  // Put the cursor after "code: " in the new entry.
+  const pos = editor.value.lastIndexOf('- code: ') + '- code: '.length;
+  editor.focus();
+  editor.setSelectionRange(pos, pos);
+  editor.scrollTop = editor.scrollHeight;
+});
+
+$('btn-campus-example').addEventListener('click', () => {
+  if (editor.value.trim()) return;
+  editor.value = campus.samples[campus.file] || '';
+  updateCampusState();
+});
+
+async function tryCampusQuestion() {
+  const text = $('campus-q').value.trim();
+  if (!text) return;
+  campus.drafts[campus.file] = editor.value;
+  const drafts = {};
+  for (const f of ['rooms', 'graph', 'coverage']) if (campusDirty(f)) drafts[f] = campus.drafts[f];
+
+  const out = await campusPost('/api/campus/try', { text, drafts });
+  if (!out) return;
+  const { res, body } = out;
+  $('campus-try-out').hidden = false;
+  if (!res.ok) {
+    $('v-try-matched').textContent = body.detail || `failed (${res.status})`;
+    return;
+  }
+  $('v-try-normalized').textContent = body.normalized || '—';
+
+  let matched;
+  if (body.hits.length) {
+    matched = body.hits.map((h) => `${h.code} (${h.matched} "${h.key}")`).join(', ');
+    if (body.ambiguous) matched += ' — ambiguous, Neo asks which';
+  } else if (body.listing.length) {
+    matched = `listing ${body.blocks.join(', ')} block: ${body.listing.join(', ')}`
+      + (body.listing_total > body.listing.length ? ` (+${body.listing_total - body.listing.length})` : '');
+  } else if (body.unknown_codes.length) {
+    matched = `nothing — not in the directory: ${body.unknown_codes.join(', ')}`;
+  } else {
+    matched = 'nothing';
+  }
+  if (body.used_drafts.length) matched += `  · using unsaved ${body.used_drafts.join(', ')}`;
+  const m = $('v-try-matched');
+  m.textContent = matched;
+  m.style.color = body.hits.length || body.listing.length ? 'var(--good)' : 'var(--warn)';
+
+  $('v-try-offline').textContent = body.offline_reply || '(no directory answer: the degraded reply)';
+  $('v-try-context').textContent = body.context;
+}
+
+$('btn-campus-try').addEventListener('click', tryCampusQuestion);
+$('campus-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryCampusQuestion(); });
+
+window.addEventListener('beforeunload', (e) => {
+  if (!campus.loaded) return;
+  campus.drafts[campus.file] = editor.value;
+  if (['rooms', 'graph', 'coverage'].some(campusDirty)) e.preventDefault();
 });
 
 // ------------------------------------------------------------------ boot

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Neo: keep DDS discovery on the robot's own interfaces (plan Phase 0, step 5).
+
+  Left to its defaults, Cyclone DDS joins every multicast-capable interface, and
+  a campus network full of other ROS machines will discover this robot, and it
+  them. Loopback carries the robot's own nodes; eth0 is the direct cable to the
+  laptop. Wi-Fi is deliberately not listed.
+
+  eth0 has presence_required="false" so an unplugged cable does not stop every
+  node on the robot from starting.
+
+  Installed to /etc/neo/cyclonedds.xml by scripts/pi/setup-system.sh and
+  selected by CYCLONEDDS_URI in /etc/profile.d/neo-ros-env.sh.
+
+  Note for editors: XML forbids two consecutive hyphens anywhere inside a
+  comment. One slipping in here makes Cyclone reject the whole file, and with
+  CYCLONEDDS_URI set globally that stops every ROS node on the robot.
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="lo"/>
+        <NetworkInterface name="eth0" presence_required="false"/>
+      </Interfaces>
+    </General>
+  </Domain>
+</CycloneDDS>

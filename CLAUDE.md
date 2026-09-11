@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Eight packages under `src/` (641 tests). Six are pure Python: `neo_webapp`
+Eight packages under `src/` (735 tests). Six are pure Python: `neo_webapp`
 (admin panel), `neo_perception` (detection/gestures/engagement), `neo_motion`
 (head arbiter and servo driver), `neo_emotion` (mood and the motion it shapes),
 `model_conn` (the `neo` CLI and off-board link), and `intelligence` (prompts,
@@ -12,7 +12,12 @@ chat, ASR/TTS). Two are ROS: `neo_msgs` (the frozen interface contracts) and
 `neo_bringup` (launch profiles). [README.md](README.md) tracks what each one
 currently does.
 
-Not built: the wake word and the vectorless campus-data engine. Speech-to-text
+Not built: the wake word. The campus knowledge base is partly built:
+`intelligence/campus.py` (the three YAML files, validation, atomic saves) and
+`intelligence/retrieval.py` (whole-phrase lookup, the "Campus directory" section
+the system prompt refers to by name, and template answers used when no model
+host answers), edited on the panel's Data tab. Its samples are validated by the
+tests, and a test holds the prompt and the section header together. Speech-to-text
 and text-to-speech *are* built, and joined on the panel's Audio tab into a spoken
 turn (transcript → `chat.ask` → sentence-streamed reply, in `neo_webapp/voice.py`),
 but nothing gates recognition yet — the wake word is what will, and until then an
@@ -104,6 +109,16 @@ would notice if they diverged.
 
 Security setup (the private CA, the three certificates, installing the CA on a
 phone) is in [docs/security.md](docs/security.md).
+
+Pi provisioning is `scripts/pi/` with [docs/pi-setup.md](docs/pi-setup.md).
+Ubuntu Server **24.04** only — the system script refuses anything else, because
+Jazzy is not packaged for other releases. The root script (`setup-system.sh`)
+and the user script (`setup-user.sh`) are split along the same line as the
+venv/ROS rule above, and no script handles a password, Wi-Fi key or
+certificate: those stay manual steps in the doc. The robot's hostname is
+`neo-pi`, reached as `neo-pi.local` once avahi is installed. Files under
+`scripts/pi/` must keep LF line endings (`.gitattributes` enforces it): bash,
+systemd and netplan on the Pi all fail on CRLF.
 
 The build order, per-phase acceptance criteria, and the reasoning behind the
 phase ordering live in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).

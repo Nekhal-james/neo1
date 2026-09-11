@@ -9,8 +9,14 @@ from model_conn.config import Endpoint
 
 
 @pytest.fixture
-def cfg() -> Config:
-    return Config()
+def cfg(tmp_path) -> Config:
+    cfg = Config()
+    # Never the repo's real campus data: once rooms are entered, a chat test's
+    # question could start matching one and get a directory answer instead.
+    cfg.rag.data_dir = str(tmp_path / "campus")
+    cfg.rag.backup_dir = str(tmp_path / "campus-backups")
+    cfg.status_file = str(tmp_path / "status.json")
+    return cfg
 
 
 @pytest.fixture

@@ -1,7 +1,12 @@
 """Create or reset the admin account.
 
-Writes the argon2 hash and a session secret into config/webapp.local.yaml, which
-is gitignored. The password itself is never stored or echoed.
+Writes the argon2 hash, a session secret and a recovery-code hash into
+config/webapp.local.yaml, which is gitignored. The password itself is never
+stored or echoed.
+
+The recovery code is printed once, here. It is what the sign-in page's "Forgot
+password?" asks for, so an operator who never runs this again still has a way
+back in from a browser.
 """
 
 from __future__ import annotations
@@ -10,7 +15,7 @@ import getpass
 import os
 import sys
 
-from ..auth import hash_password
+from ..auth import MIN_PASSWORD_CHARS, hash_password, hash_recovery_code, new_recovery_code
 from ..config import LOCAL_CONFIG, Config, new_session_secret, write_local
 
 
@@ -29,25 +34,33 @@ def main(argv: list[str] | None = None) -> int:
             print("passwords do not match", file=sys.stderr)
             return 1
 
-    if len(password) < 10:
-        print("use at least 10 characters", file=sys.stderr)
+    if len(password) < MIN_PASSWORD_CHARS:
+        print(f"use at least {MIN_PASSWORD_CHARS} characters", file=sys.stderr)
         return 1
 
-    existing = Config.load()
-    secret = existing.auth.session_secret or new_session_secret()
-
+    code = new_recovery_code()
     path = write_local(
         {
             "auth": {
                 "username": username,
                 "password_hash": hash_password(password),
-                "session_secret": secret,
+                # A fresh secret on every reset: running this is how a forgotten
+                # or leaked password is recovered, and sessions signed under the
+                # old one should not outlive it.
+                "session_secret": new_session_secret(),
+                "recovery_hash": hash_recovery_code(code),
             }
-        }
+        },
+        Config.load().secrets_path,
     )
     print(f"admin '{username}' written to {path}")
     if path == LOCAL_CONFIG:
         print("this file holds secrets and is gitignored - keep it that way")
+    print()
+    print(f"Recovery code: {code}")
+    print("Keep it somewhere safe, away from the robot. It resets the password from")
+    print("the sign-in page (Forgot password?), works once, and is shown only now.")
+    print("Restart the panel for the new password to take effect.")
     return 0
 
 

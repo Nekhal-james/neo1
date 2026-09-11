@@ -238,3 +238,49 @@ def test_link_certs_keep_the_long_lifetime(tmp_path: Path):
     cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
     lifetime = cert.not_valid_after_utc - cert.not_valid_before_utc
     assert lifetime.days > 398
+
+
+def test_panel_names_include_the_pis_mdns_name(monkeypatch):
+    """The robot is browsed as https://neo-pi.local. A certificate that names
+    only `neo-pi` does not match that, and the phone refuses the panel."""
+    import socket
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "neo-pi")
+    monkeypatch.setattr(certs, "_interface_ipv4s", lambda: set())
+    names, _ = certs.panel_hostnames_and_ips()
+    assert "neo-pi" in names
+    assert "neo-pi.local" in names
+
+
+def test_panel_ips_include_the_real_interface_addresses(monkeypatch):
+    """On Ubuntu the hostname resolves to 127.0.1.1, which no other device
+    dials. The static address on the laptop cable has to be in the SANs."""
+    import socket
+    import subprocess
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "neo-pi")
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, 0, 0, "", ("127.0.1.1", 0))]
+    )
+
+    class Completed:
+        stdout = " ".join(["192.168.50.2", "10.1.2.3", "fe80::2ecf:67ff:fe66:776a", "127.0.0.1"])
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Completed())
+    _, ips = certs.panel_hostnames_and_ips()
+    assert "192.168.50.2" in ips
+    assert "10.1.2.3" in ips
+    assert not any(":" in ip for ip in ips), "IPv6 link-local is never dialled by name"
+
+
+def test_an_unavailable_interface_lookup_is_not_an_error(monkeypatch):
+    """Windows and macOS have no `hostname -I`; issuing a cert there must still work."""
+    import subprocess
+
+    def missing(*a, **k):
+        raise FileNotFoundError("hostname")
+
+    monkeypatch.setattr(subprocess, "run", missing)
+    assert certs._interface_ipv4s() == set()
+    names, ips = certs.panel_hostnames_and_ips()
+    assert "neo.local" in names and "127.0.0.1" in ips

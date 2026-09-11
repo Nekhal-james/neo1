@@ -14,8 +14,47 @@
     <div class="badge" id="badge-backend">backend: ?</div>
     <div class="spacer"></div>
     <button class="danger" id="btn-estop">E-STOP</button>
+    <button id="btn-password">Password</button>
     <button id="btn-logout">Sign out</button>
   </header>
+
+  <dialog id="password-dialog">
+    <form id="password-form" class="dialog-card">
+      <h2>Change password</h2>
+      <label for="pw-current">Current password</label>
+      <input id="pw-current" type="password" autocomplete="current-password" required>
+      <label for="pw-new">New password</label>
+      <input id="pw-new" type="password" autocomplete="new-password" minlength="10" required>
+      <label for="pw-confirm">New password again</label>
+      <input id="pw-confirm" type="password" autocomplete="new-password" minlength="10" required>
+      <div class="hint left">
+        At least 10 characters. Changing it signs out every other browser; this one
+        stays signed in.
+      </div>
+      <div class="error" id="pw-error"></div>
+      <div class="controls left">
+        <button type="submit" class="accent" id="pw-submit">Change password</button>
+        <button type="button" id="pw-cancel">Cancel</button>
+      </div>
+
+      <div class="dialog-section">
+        <h2>Recovery code</h2>
+        <div class="row"><span class="k">Status</span><span class="v" id="v-recovery">—</span></div>
+        <div class="hint left" style="margin-top:0">
+          Resets the password from the sign-in page if you forget it; without one,
+          "Forgot password?" cannot help. Works once.
+          Making a new one needs the current password above and replaces the old code.
+        </div>
+        <div class="controls left">
+          <button type="button" id="pw-recovery">New recovery code</button>
+        </div>
+        <div class="recovery-code" id="pw-recovery-code" hidden></div>
+        <div class="hint left" id="pw-recovery-note" hidden>
+          Save this now, somewhere away from the robot. It will not be shown again.
+        </div>
+      </div>
+    </form>
+  </dialog>
 
   <nav id="tabs">
     <button data-tab="sources" class="active">Sources</button>
@@ -24,7 +63,7 @@
     <button data-tab="vision">Vision</button>
     <button data-tab="audio">Audio</button>
     <button data-tab="dialog">Dialog</button>
-    <button data-tab="data" disabled>Data<span class="phase">P7</span></button>
+    <button data-tab="data">Data</button>
     <button data-tab="emotion" disabled>Emotion<span class="phase">P9</span></button>
     <button data-tab="logs" disabled>Logs<span class="phase">P10</span></button>
   </nav>
@@ -320,7 +359,162 @@
       </div>
     </section>
 
-    <section class="tab" id="tab-data"><div class="stub">Campus data editor, coverage map, unanswered questions — <code>Phase 7</code></div></section>
+    <!-- Data -->
+    <section class="tab" id="tab-data">
+      <div class="grid">
+        <div class="card wide">
+          <h2>Campus data</h2>
+          <div class="editor-bar">
+            <span class="seg" id="campus-files">
+              <button data-file="rooms" class="on">Rooms</button>
+              <button data-file="graph">Graph</button>
+              <button data-file="coverage">Coverage</button>
+            </span>
+            <span class="v muted" id="campus-state">loading…</span>
+          </div>
+          <textarea id="campus-editor" spellcheck="false" autocomplete="off"
+                    aria-label="Campus data file" placeholder="Empty. Use the example below, or start typing."></textarea>
+          <div class="controls left">
+            <button id="btn-campus-save" class="accent">Save</button>
+            <button id="btn-campus-validate">Check</button>
+            <button id="btn-campus-revert">Revert</button>
+            <button id="btn-campus-template">Add a room</button>
+            <button id="btn-campus-example">Use the example</button>
+          </div>
+          <ul class="issues" id="campus-issues"></ul>
+          <div class="hint left">
+            Saved exactly as typed, comments included, and only when there are no
+            errors. The previous version is kept in <code>var/campus/backups</code>.
+            Neo uses a saved change on the very next question, with no restart.
+          </div>
+        </div>
+
+        <div class="card wide">
+          <h2>Try a question</h2>
+          <div class="ask-row">
+            <input id="campus-q" type="text" autocomplete="off" placeholder="how do I get to the library">
+            <button id="btn-campus-try">Try</button>
+          </div>
+          <div id="campus-try-out" hidden>
+            <div class="row"><span class="k">Heard as</span><span class="v" id="v-try-normalized">—</span></div>
+            <div class="row"><span class="k">Matched</span><span class="v" id="v-try-matched">—</span></div>
+            <div class="row"><span class="k">Neo, with no model</span><span class="v" id="v-try-offline">—</span></div>
+            <details class="context">
+              <summary>What the model is shown</summary>
+              <pre id="v-try-context"></pre>
+            </details>
+          </div>
+          <div class="hint left">
+            Uses what is in the editor, saved or not, and never asks the model, so
+            you can tune aliases before saving. Ask the way a student would say it
+            out loud. If the right entry does not match, add that wording as an alias.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Coverage</h2>
+          <div class="row"><span class="k">Entries</span><span class="v" id="v-campus-rooms">—</span></div>
+          <div class="row"><span class="k">Graph</span><span class="v" id="v-campus-graph">—</span></div>
+          <table class="cov" id="campus-coverage">
+            <thead><tr><th>Block</th><th>Status</th><th>Floors</th><th>Entries</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>How Neo uses this</h2>
+          <p class="prose">
+            Nothing is embedded or searched by similarity. Neo matches the words of
+            a question against each entry's <b>code</b>, <b>name</b> and
+            <b>aliases</b>, as whole phrases. Only the entries that match are shown
+            to the language model, and it is told to use no other campus facts.
+          </p>
+          <p class="prose">
+            When the model host is away, which is most of the time, Neo answers from
+            the matched entry by itself. So a place people cannot find by the words
+            they use is a place Neo does not know.
+          </p>
+        </div>
+
+        <div class="card wide">
+          <h2>Format</h2>
+          <div class="format" id="format-rooms">
+            <p class="prose"><code>rooms.yaml</code> is a list, one entry per place people ask for.
+              Fields marked * are required. Anything not in this table is rejected, so a typo cannot silently lose data.</p>
+            <div class="table-wrap">
+              <table class="fields">
+                <tr><th>Field</th><th>What to put</th><th>Example</th></tr>
+                <tr><td><code>code</code> *</td><td>Exactly as signposted on the door. Unique. For places with no number, make a short one.</td><td>CS-204, LIB</td></tr>
+                <tr><td><code>name</code> *</td><td>The official name, in full.</td><td>Computer Science Lab 2</td></tr>
+                <tr><td><code>block</code> *</td><td>Just the block's letter or number, spelled the same everywhere. Neo adds the word "block".</td><td>B</td></tr>
+                <tr><td><code>floor</code> *</td><td>A whole number. 0 is the ground floor, -1 the basement.</td><td>2</td></tr>
+                <tr><td><code>type</code></td><td>classroom, lab, office or facility. Lets "which labs are in B block" filter.</td><td>lab</td></tr>
+                <tr><td><code>wing</code></td><td>The wing or side, if the block has them.</td><td>East</td></tr>
+                <tr><td><code>department</code></td><td>The department that owns it.</td><td>CSE</td></tr>
+                <tr><td><code>aliases</code></td><td>Every other way people say it: short names, old names, nicknames. A list.</td><td>["cs lab 2", "programming lab"]</td></tr>
+                <tr><td><code>landmarks</code></td><td>Permanent things beside it that a visitor can see. The first is spoken. A list.</td><td>["opposite the lift"]</td></tr>
+                <tr><td><code>directions</code></td><td>How to walk there from the reception desk, said the way you would say it. Wins over the graph.</td><td>Take the stairs on your left up one floor.</td></tr>
+                <tr><td><code>notes</code></td><td>One short sentence: opening hours, who to ask.</td><td>Open 9 am to 5 pm on weekdays.</td></tr>
+                <tr><td><code>node</code></td><td>Optional. The nearest node in <code>graph.yaml</code>, for directions worked out from the graph.</td><td>b2_lab_corridor</td></tr>
+              </table>
+            </div>
+          </div>
+          <div class="format" id="format-graph" hidden>
+            <p class="prose"><code>graph.yaml</code> is optional. It describes walking routes as <b>nodes</b>
+              (places: <code>id</code>, <code>kind</code>, <code>block</code>, <code>floor</code>) joined by
+              <b>edges</b> (<code>from</code>, <code>to</code>, <code>instruction</code>, and optionally
+              <code>distance_m</code>, <code>kind</code>, <code>reverse_instruction</code>). Directions start at the node
+              with id <code>reception</code> and follow the shortest route. An edge is one-way unless it has a
+              <code>reverse_instruction</code>, because "go up the stairs" is wrong walked backwards.
+              If you only need directions to a few places, a room's <code>directions</code> text is simpler.</p>
+          </div>
+          <div class="format" id="format-coverage" hidden>
+            <p class="prose"><code>coverage.yaml</code> says how much of each block has been entered, so Neo can
+              be honest. <b>complete</b>: every room on the listed floors is in rooms.yaml, so a miss there means the
+              room does not exist. <b>partial</b>: some rooms are entered. <b>not_surveyed</b>: nothing yet, and Neo says
+              "I haven't learned C block yet" instead of guessing.</p>
+          </div>
+          <div class="example-head">
+            <span class="k">Example</span>
+          </div>
+          <pre class="example" id="campus-sample"></pre>
+        </div>
+
+        <div class="card wide">
+          <h2>Writing data Neo can find</h2>
+          <ol class="guide">
+            <li><b>Add the places people actually ask for</b>, not just classrooms: the library, canteen,
+              washrooms, admin office, fee counter, principal's office, placement cell, parking. Use
+              <code>type: facility</code> for these.</li>
+            <li><b>Aliases are how Neo finds things.</b> Add the words students really use: "canteen",
+              "cafeteria", "mess"; "seminar hall", "auditorium"; old names from before a renaming. Each alias
+              is matched as a whole phrase anywhere in the question, word for word, so add a plural too if people
+              say one ("chemistry labs").</li>
+            <li><b>Do not add spellings of the code as aliases.</b> "CS-204", "cs204", "C S 204" and a spoken
+              "c s two oh four" are all matched already. Do add a spoken form Neo mishears, once you have seen
+              it in <b>Try a question</b> or on the Audio tab.</li>
+            <li><b>Avoid general aliases.</b> One word like "lab", "room" or "office" matches almost every
+              question. Say "chemistry lab", not "lab". The checker warns about these.</li>
+            <li><b>Sharing an alias is fine when it is really shared.</b> If every floor has a "washroom", give
+              them all that alias. Neo will ask which one the person means. Never give one room another room's code.</li>
+            <li><b>Be consistent with blocks and floors.</b> Always "B", never "B block" or "Block-B". Floors are
+              numbers, 0 for the ground floor.</li>
+            <li><b>Landmarks must be visible and permanent:</b> "opposite the lift", "next to the notice board".
+              Not "near the red poster". Put the most useful one first; it is the one spoken.</li>
+            <li><b>Write directions from the reception desk, for the ear.</b> Short steps, left and right, stairs
+              or lift, floor changes: "Go past the notice board, take the lift to the second floor, it's the
+              first door on your right."</li>
+            <li><b>Keep fields short.</b> A small model reads them and a speaker says them. One sentence of notes,
+              no paragraphs, no URLs or phone-number lists.</li>
+            <li><b>Keep coverage honest.</b> Mark a block <code>complete</code> only when every room on those
+              floors is entered. Until then use <code>partial</code>, or Neo will tell someone a real room does
+              not exist.</li>
+            <li><b>Test before you save.</b> Try each new entry with two or three phrasings. If the model is
+              shown the wrong entry, or none, fix the aliases, not the prompt.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
     <section class="tab" id="tab-emotion"><div class="stub">Emotion state, overrides, gesture triggers — <code>Phase 9</code></div></section>
     <section class="tab" id="tab-logs"><div class="stub">Journal tail, bag recording — <code>Phase 10</code></div></section>
   </main>

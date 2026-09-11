@@ -15,7 +15,16 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, status
 from fastapi.responses import JSONResponse
 
-from ..auth import SESSION_COOKIE, require_session, require_ws_session
+from ..auth import (
+    MIN_PASSWORD_CHARS,
+    SESSION_COOKIE,
+    hash_password,
+    hash_recovery_code,
+    new_recovery_code,
+    require_session,
+    require_ws_session,
+)
+from ..config import new_session_secret, write_local
 from ..bridge import BACKENDS, STREAMS
 from ..bridge.mock import MockBridge
 from ..dialog_status import read_dialog_status
@@ -90,6 +99,181 @@ async def logout() -> JSONResponse:
 @router.get("/api/auth/me")
 async def me(user: str = Depends(require_session)) -> dict:
     return {"user": user}
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _check_not_throttled(auth, client_ip: str) -> None:
+    remaining = auth.throttled(client_ip)
+    if remaining > 0:
+        raise HTTPException(429, f"too many attempts, retry in {int(remaining)}s")
+
+
+def _check_new_password(new: str) -> None:
+    if len(new) < MIN_PASSWORD_CHARS:
+        raise HTTPException(400, f"the new password must be at least {MIN_PASSWORD_CHARS} characters")
+    if len(new) > 1024:
+        raise HTTPException(400, "the new password is too long")
+
+
+def _secrets_path(request: Request):
+    path = request.app.state.config.secrets_path
+    if path is None:
+        raise HTTPException(503, "this panel was started without a config file to save to")
+    return path
+
+
+def _with_session(request: Request, body: dict, token: str) -> JSONResponse:
+    resp = JSONResponse(body)
+    resp.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=request.app.state.auth.cfg.session_max_age_s,
+        httponly=True,
+        samesite="lax",
+        secure=request.app.state.config.server.tls.enabled,
+        path="/",
+    )
+    return resp
+
+
+def _store_credentials(request: Request, new_password: str, *, new_recovery: bool) -> str | None:
+    """Save a new password (and optionally a new recovery code), rotating the
+    session secret. Returns the new recovery code, if one was made.
+
+    Disk first: if the write fails, nothing has changed anywhere. Then memory,
+    which signs out every browser holding a cookie signed with the old secret.
+    """
+    auth = request.app.state.auth
+    updates = {"password_hash": hash_password(new_password), "session_secret": new_session_secret()}
+    code = None
+    if new_recovery:
+        code = new_recovery_code()
+        updates["recovery_hash"] = hash_recovery_code(code)
+    write_local({"auth": updates}, _secrets_path(request))
+    auth.replace_credentials(updates["password_hash"], updates["session_secret"],
+                             updates.get("recovery_hash"))
+    return code
+
+
+@router.post("/api/auth/password")
+async def change_password(request: Request, user: str = Depends(require_session)) -> JSONResponse:
+    """Change the admin password from the panel.
+
+    Needs the current password as well as a session: a session is a cookie on
+    whatever browser was left signed in, and it must not be enough to lock the
+    owner out. Wrong guesses count toward the login lockout, so this is not a
+    second, unthrottled way to brute-force the password.
+
+    Saving rotates the session secret, which signs out every other browser; this
+    one is re-issued a cookie and stays signed in.
+    """
+    payload = await request.json()
+    current = str(payload.get("current_password", ""))
+    new = str(payload.get("new_password", ""))
+    auth = request.app.state.auth
+    client_ip = _client_ip(request)
+
+    _check_not_throttled(auth, client_ip)
+    _secrets_path(request)
+    _check_new_password(new)
+
+    def change() -> str:
+        # argon2 is deliberately slow; off the event loop so the head and the
+        # state feed do not stall while it runs.
+        if not auth.verify(user, current, client_ip):
+            log.warning("password change with a wrong current password from %s", client_ip)
+            raise HTTPException(403, "the current password is wrong")
+        if auth.matches_current(new):
+            raise HTTPException(400, "choose a password different from the current one")
+        _store_credentials(request, new, new_recovery=False)
+        log.info("admin password changed from %s; other sessions signed out", client_ip)
+        return auth.issue(user)
+
+    token = await asyncio.to_thread(change)
+    return _with_session(request, {"ok": True}, token)
+
+
+# -- forgot password: one-time recovery codes --------------------------------
+#
+# The robot has no email or SMS to send a reset link through, so the proof of
+# ownership is a code the owner was shown once and kept. A reset form that
+# needed less -- just the username, say -- would let anyone who can reach the
+# panel on the campus network take over a robot that moves and talks.
+
+
+@router.get("/api/auth/recovery")
+async def recovery_status(request: Request, user: str = Depends(require_session)) -> dict:
+    return {"configured": bool(request.app.state.auth.cfg.recovery_hash)}
+
+
+@router.post("/api/auth/recovery")
+async def new_recovery(request: Request, user: str = Depends(require_session)) -> dict:
+    """Generate a recovery code, replacing any earlier one, and show it once.
+
+    Needs the current password for the same reason a password change does: a
+    code is as good as the password, so a browser left signed in must not be
+    able to mint one.
+    """
+    payload = await request.json()
+    current = str(payload.get("current_password", ""))
+    auth = request.app.state.auth
+    client_ip = _client_ip(request)
+    _check_not_throttled(auth, client_ip)
+    path = _secrets_path(request)
+
+    def make() -> str:
+        if not auth.verify(user, current, client_ip):
+            log.warning("recovery code request with a wrong password from %s", client_ip)
+            raise HTTPException(403, "the current password is wrong")
+        code = new_recovery_code()
+        recovery_hash = hash_recovery_code(code)
+        write_local({"auth": {"recovery_hash": recovery_hash}}, path)
+        auth.cfg.recovery_hash = recovery_hash
+        log.info("new recovery code generated from %s; the previous one no longer works", client_ip)
+        return code
+
+    return {"ok": True, "recovery_code": await asyncio.to_thread(make)}
+
+
+@router.post("/api/auth/recover")
+async def recover(request: Request) -> JSONResponse:
+    """Forgot password: set a new one with the recovery code, and sign in.
+
+    Unauthenticated by necessity, so everything about it is conservative:
+    - throttled by the login lockout, and a wrong code counts as a failed login;
+    - the code works once -- it is replaced by a fresh one, returned here and
+      never again, so the owner is not left without a way back in;
+    - the session secret rotates, signing out every other browser, since a
+      forgotten password is sometimes a stolen one.
+    """
+    payload = await request.json()
+    code = str(payload.get("recovery_code", ""))
+    new = str(payload.get("new_password", ""))
+    auth = request.app.state.auth
+    client_ip = _client_ip(request)
+
+    _check_not_throttled(auth, client_ip)
+    if not auth.cfg.recovery_hash:
+        raise HTTPException(
+            503, "no recovery code is set for this robot - run neo --webapp setup on the robot"
+        )
+    _secrets_path(request)
+    _check_new_password(new)
+
+    def reset() -> tuple[str, str]:
+        if not auth.verify_recovery(code, client_ip):
+            log.warning("failed password recovery from %s", client_ip)
+            raise HTTPException(401, "that recovery code is not valid")
+        fresh = _store_credentials(request, new, new_recovery=True)
+        log.warning("admin password reset with the recovery code from %s; "
+                    "other sessions signed out, a new recovery code issued", client_ip)
+        return auth.issue(auth.cfg.username), fresh
+
+    token, fresh = await asyncio.to_thread(reset)
+    return _with_session(request, {"ok": True, "recovery_code": fresh}, token)
 
 
 # -- config (the subset the operator UI needs to render itself correctly) --

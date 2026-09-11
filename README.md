@@ -13,17 +13,17 @@ tracks what currently exists.
 
 ## Status
 
-Eight packages under `src/` are implemented and tested; the rest of the plan
-(the wake word, the vectorless campus-data engine) has not been started.
+Eight packages under `src/` are implemented and tested. The wake word has not
+been started; the campus knowledge base is partly built (see below).
 
 | Package | Implements | Status |
 |---|---|---|
-| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, Dialog, and Audio tabs live; Data/Emotion/Logs are stubs filled in by later phases |
+| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, Audio, Dialog and Data tabs live (Data edits the campus files, checks them, and tries questions against them); password change and recovery-code reset; Emotion/Logs are stubs filled in by later phases |
 | [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification |
 | [`neo_motion`](src/neo_motion/README.md) | Phase 3 — head arbitration and the servo driver | Priority arbiter with crossfade and source expiry; driver enforcing clamp/slew/deadband/watchdog/e-stop against a mock or PCA9685 backend |
 | [`neo_emotion`](src/neo_emotion/README.md) | Phase 9 — mood and the movement it shapes | Event-driven state machine with dwell times; idle drift, micro-motion, and bounded gesture overlays. Publishes parameters only — no path to the servos |
 | [`model_conn`](src/model-conn/README.md) | Phase 6 (partial) — the off-board LLM host/receiver link | CLI for serving the model (host) and checking the link (receiver); real mTLS via a private CA (`neo --tls init`) |
-| [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; streaming Vosk STT and sentence-streamed Piper TTS, joined into a spoken conversation on the panel's Audio tab; RAG data folder and system prompt are placeholders |
+| [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; streaming Vosk STT and sentence-streamed Piper TTS, joined into a spoken conversation on the panel's Audio tab; Neo's system prompt; vectorless retrieval over `rooms`/`graph`/`coverage` YAML (whole-phrase matching on codes, names and aliases, spoken numbers folded in), sent to the model as only the matched entries and answered from templates when the model host is away |
 | [`neo_msgs`](src/neo_msgs/README.md) | Phase 1 — the frozen message/service contracts | All 15 interfaces defined; a contract test guards them against drifting from the Python mirrors the panel runs on |
 | [`neo_bringup`](src/neo_bringup/README.md) | Phase 1 — launch profiles | `dev`, `hardware`, `hybrid`, `bench`; the node registry lists every node the robot will run and which phase makes it real |
 
@@ -32,7 +32,7 @@ All of them run with no Pi, no ROS, and no servos attached — `neo_webapp` via 
 mock servo backend, `neo_perception` against any camera the panel is using,
 `model_conn`/`intelligence` against whatever endpoints you point them at.
 
-641 tests. Run each package from inside its own directory
+735 tests. Run each package from inside its own directory
 (`cd src/neo_webapp && python -m pytest -q`) — the per-package `tests/conftest.py`
 files collide if you point pytest at `src/` as a whole. `neo_msgs` and
 `neo_bringup` are tested the same way with plain pytest: their tests read the
@@ -142,6 +142,12 @@ uses, since perception targets the Pi's CPU.
 Do not source ROS and activate the venv in the same shell to run tests; see the
 note in CLAUDE.md about `launch_testing` and pytest versions.
 
+**Setting up the Raspberry Pi** is scripted: flash Ubuntu Server 24.04 with your
+SSH key and Wi-Fi, run `scripts/pi/sync-to-pi.sh` from the laptop, then
+`setup-system.sh` (with sudo) and `setup-user.sh` on the Pi. The full
+walk-through, including the steps that stay manual because they need a password
+or a certificate, is [docs/pi-setup.md](docs/pi-setup.md).
+
 To run the admin panel against a simulated robot:
 
 ```bash
@@ -223,8 +229,11 @@ placeholders.
 - **Room-code accuracy.** The small Vosk model hears "CS-204" as "p s two hundred
   for". Plan 5.4's grammar-constrained recognition over the room list is the
   fix, and it needs the Phase 7 data to build the grammar from.
-- **The vectorless campus-data engine** — the RAG data folder exists, the
-  retrieval logic does not (plan Phase 7).
+- **The rest of the campus knowledge base** (plan Phase 7). Built: the data
+  files, their validation, retrieval, template answers, and the Data tab.
+  Not built: fuzzy matching of misheard codes, the unanswered-question log,
+  the evaluation set, and the `kb_service` ROS wrapper. There is no campus data
+  yet; it is entered on the Data tab.
 - **The ROS nodes** wrapping the existing Python cores. Each `nodes/*.py`
   documents its topics and raises `NotImplementedError`; the contracts they were
   waiting on now exist, so they are unblocked.

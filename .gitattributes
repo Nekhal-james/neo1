@@ -1,0 +1,7 @@
+# Files that run on the Pi must keep LF line endings.
+#
+# This repo is worked on from Windows with core.autocrlf=true, which would
+# otherwise check these out with CRLF -- and bash ("$'\r': command not found"),
+# systemd and netplan on the Pi all fail on the stray carriage returns.
+*.sh                  text eol=lf
+scripts/pi/files/**   text eol=lf

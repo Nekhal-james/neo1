@@ -1,0 +1,17 @@
+# Neo: turn off Wi-Fi power saving (plan Phase 0, step 2).
+#
+# With power saving on, the Pi's Wi-Fi naps between packets. That is invisible
+# to a browser and very visible to a link health probe every two seconds, which
+# reads it as the failover path flapping.
+[Unit]
+Description=Neo: disable Wi-Fi power saving on wlan0
+BindsTo=sys-subsystem-net-devices-wlan0.device
+After=sys-subsystem-net-devices-wlan0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/iw dev wlan0 set power_save off
+
+[Install]
+WantedBy=sys-subsystem-net-devices-wlan0.device

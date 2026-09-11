@@ -87,6 +87,16 @@ gitignored and written by `neo --webapp setup`. The local file merges over the
 main `webapp.yaml` file to apply those overrides without making the working tree
 dirty.
 For unattended provisioning: `NEO_ADMIN_PASSWORD=... neo --webapp setup`.
+Signed in, **Password** in the header changes it (`POST /api/auth/password`): it
+needs the current password, writes the new hash to the same file, and rotates
+the session secret so every other browser is signed out.
+
+Forgot password uses a one-time recovery code, printed by `neo --webapp setup`
+and replaceable from the same dialog (`POST /api/auth/recovery`). The sign-in
+page's **Forgot password?** sends it with a new password to `POST
+/api/auth/recover`, which is throttled by the login lockout, spends the code,
+returns a fresh one and signs in. Only the code's argon2 hash is stored, as
+`auth.recovery_hash`. See [docs/security.md](../../docs/security.md) §2.6.
 
 ## API
 

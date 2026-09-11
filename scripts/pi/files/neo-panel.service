@@ -1,0 +1,22 @@
+# Neo: the admin panel as a service, so it survives reboots and logouts.
+#
+# Only installed with `setup-system.sh --with-panel-service`. It is enabled but
+# not started: it cannot run until setup-user.sh has built the venv and
+# `neo --webapp setup` has set the admin password.
+#
+# @USER@, @REPO@ and @VENV@ are filled in by scripts/pi/setup-system.sh.
+[Unit]
+Description=Neo admin panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@VENV@/bin/neo --webapp up
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

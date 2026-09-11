@@ -28,6 +28,9 @@ prompts:
   system_prompt_path: ""
 
 rag:
+  # rooms.yaml, graph.yaml, coverage.yaml -- edited on the admin panel's Data tab.
   data_dir: src/intelligence/rag/data
+  # The panel copies each file here before overwriting it (last 30 per file).
+  backup_dir: var/campus/backups
 
 status_file: var/intelligence/status.json

@@ -64,6 +64,8 @@ class PromptsConfig:
 @dataclass
 class RagConfig:
     data_dir: str = "src/intelligence/rag/data"
+    backup_dir: str = "var/campus/backups"
+    """Where the admin panel keeps the previous version of each file it saves."""
 
 
 @dataclass
@@ -83,6 +85,10 @@ class Config:
     @property
     def rag_data_path(self) -> Path:
         return _resolve(self.rag.data_dir)
+
+    @property
+    def rag_backup_path(self) -> Path:
+        return _resolve(self.rag.backup_dir)
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
@@ -121,6 +127,7 @@ class Config:
             ),
             rag=RagConfig(
                 data_dir=rag_raw.get("data_dir", "src/intelligence/rag/data"),
+                backup_dir=rag_raw.get("backup_dir", RagConfig.backup_dir),
             ),
             status_file=raw.get("status_file", "var/intelligence/status.json"),
         )

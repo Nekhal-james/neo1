@@ -116,6 +116,8 @@ header {
 }
 
 .brand { font-weight: 700; letter-spacing: 4px; }
+header { flex-wrap: wrap; row-gap: 8px; }
+header button { white-space: nowrap; }
 .brand span { color: var(--accent); }
 .spacer { flex: 1; }
 
@@ -332,3 +334,118 @@ video, canvas.preview {
 .ask-row input { flex: 1; }
 
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+
+/* ---- password dialog ---- */
+
+dialog#password-dialog {
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  width: min(360px, calc(100vw - 32px));
+}
+
+dialog#password-dialog::backdrop { background: rgba(5, 7, 10, .7); }
+.dialog-card { padding: 22px; }
+.login-card .hint { margin-top: 16px; }
+.login-card .hint a, .dialog-card a { color: var(--accent); text-decoration: none; }
+.login-card .hint a:hover { text-decoration: underline; }
+.login-help { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+
+.recovery-code {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px dashed var(--accent-dim);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--accent);
+  font: 600 15px/1.4 var(--mono);
+  letter-spacing: .5px;
+  text-align: center;
+  user-select: all;
+  word-break: break-all;
+}
+
+.dialog-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.dialog-section .row { padding: 0 0 6px; border-bottom: none; }
+.login-card .hint code { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+.dialog-card h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); }
+
+/* ---- data tab ---- */
+
+.card.wide { grid-column: 1 / -1; }
+.muted { color: var(--muted); }
+.controls.left { justify-content: flex-start; margin-top: 10px; }
+.hint.left { text-align: left; }
+.hint code, .prose code, .guide code, .fields code { font-family: var(--mono); color: var(--accent); font-size: 12px; }
+
+button.accent { background: var(--accent-dim); border-color: var(--accent); color: #0b0e12; font-weight: 600; }
+
+.editor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+#campus-editor {
+  width: 100%;
+  min-height: 360px;
+  resize: vertical;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 13px/1.55 var(--mono);
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+
+.issues { list-style: none; margin: 10px 0 0; padding: 0; font-size: 13px; }
+.issues li { padding: 6px 10px; border-left: 3px solid var(--line); margin-top: 4px; background: var(--panel-2); border-radius: 0 6px 6px 0; }
+.issues li.err { border-left-color: var(--bad); }
+.issues li.warn { border-left-color: var(--warn); }
+.issues li.ok { border-left-color: var(--good); color: var(--good); }
+.issues li.jump { cursor: pointer; }
+.issues li.jump:hover { background: #222a33; }
+.issues .where { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+details.context { margin-top: 10px; }
+details.context summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+
+pre#v-try-context, pre.example {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 12px/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+pre.example { white-space: pre; max-height: 420px; overflow: auto; }
+.example-head { margin-top: 14px; font-size: 13px; }
+
+table.cov, table.fields { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+table.cov th, table.fields th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+table.cov td, table.fields td { padding: 6px 8px 6px 0; border-bottom: 1px solid #1e242c; vertical-align: top; }
+table.fields td:first-child { white-space: nowrap; }
+table.fields td:last-child { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.table-wrap { overflow-x: auto; }
+
+.st-complete { color: var(--good); }
+.st-partial { color: var(--warn); }
+.st-not_surveyed, .st-unlisted { color: var(--muted); }
+
+.prose { margin: 0 0 10px; color: var(--text); font-size: 13px; }
+.prose:last-child { margin-bottom: 0; }
+
+ol.guide { margin: 0; padding-left: 20px; font-size: 13px; }
+ol.guide li { margin-bottom: 8px; }
+ol.guide li b { color: var(--text); }
