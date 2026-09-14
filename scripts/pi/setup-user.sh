@@ -56,9 +56,17 @@ fi
 ros_shell() {
   (
     # Re-prepend the system dirs so `python3` (and anything colcon/ament shell
-    # out to) resolves to /usr/bin's, regardless of what a conda/pyenv/nvm
-    # install ahead of it on the calling shell's PATH would otherwise win.
+    # out to) resolves to /usr/bin's on PATH...
     export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+    # ...but PATH order alone does not win here: CMake's FindPython3 module
+    # explicitly checks CONDA_PREFIX/VIRTUAL_ENV and *prefers* a conda/venv
+    # Python over anything found on PATH (Python3_FIND_VIRTUALENV defaults to
+    # FIRST) -- so with CONDA_PREFIX still set, cmake picks conda's python3
+    # right back regardless of PATH. Measured: reordering PATH alone did not
+    # stop `ament_package_xml.cmake` from invoking .../miniforge3/bin/python3.
+    # Unsetting the markers both conda and a pip venv leave behind removes the
+    # signal CMake keys off, not just one path it might search.
+    unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL CONDA_PROMPT_MODIFIER VIRTUAL_ENV
     set +u
     # shellcheck disable=SC1090
     source "/opt/ros/$ROS_DISTRO/setup.bash"
