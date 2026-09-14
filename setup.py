@@ -81,7 +81,7 @@ setup(
         # only the real YOLO detector backend needs this.
         "detector": ["ultralytics>=8.1", "opencv-python-headless>=4.9", "numpy>=1.24"],
         # intelligence's chat.py works with none of this; only real ASR/TTS need it.
-        "voice": ["vosk>=0.3.45", "piper-tts>=1.2"],
+        "voice": ["vosk>=0.3.44", "piper-tts>=1.2"],
         # neo_motion's PCA9685 backend: plain I2C register writes. Not Adafruit's
         # CircuitPython stack, which cannot be imported on Ubuntu for the Pi
         # without a GPIO library -- see neo_motion/backend.py.

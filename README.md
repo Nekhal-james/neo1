@@ -218,6 +218,153 @@ including why TLS is required for the panel, the source-backend seam, the
 joystick deadman, and why the RAG data folder and system prompt are still
 placeholders.
 
+## Command-line reference
+
+Every argument every command-line entry point in this repo accepts, in one
+place. Mutually exclusive flags are marked; everything else can be combined
+freely with `--config`/`--host`/etc. where noted.
+
+### Config-resolution environment variables
+
+Each package that reads a two-layer `config/<name>.yaml` + `config/<name>.local.yaml`
+also honors one environment variable that, like that package's own `--config`
+flag, names exactly one file and skips the local-file merge entirely. Useful
+for pointing a one-off command at a test fixture without a `--config` flag
+existing on every code path that loads that config.
+
+| Variable | Package | Equivalent to |
+|---|---|---|
+| `NEO_WEBAPP_CONFIG` | `neo_webapp` | `neo-webapp`'s `--config` |
+| `NEO_MOTION_CONFIG` | `neo_motion` | `neo-servo-check`'s `--config` |
+| `NEO_MODEL_CONN_CONFIG` | `model_conn` | `neo`'s top-level `--config` |
+| `NEO_INTELLIGENCE_CONFIG` | `intelligence` | (no CLI flag of its own; set this to override `config/intelligence.yaml` for `neo --prompt`, the panel's Dialog/Audio tabs, etc.) |
+
+### `neo` -- the model-conn CLI (installed by `pip install -e ".[dev]"`)
+
+Top-level flags on `neo` itself. **Exactly one** of `--prompt`, `command up`,
+`--connection:status`, `--connection:ping`, `--vision:status`, `--webapp ...`
+or `--tls ...` may be given per invocation -- combining two of them is an
+error.
+
+| Flag | Takes | Meaning |
+|---|---|---|
+| `--model` | `PATH` | Path to a `.gguf` model file. Only meaningful with the positional `up` command (host role): starts Ollama serving that model. |
+| `up` (positional) | -- | Host role: start serving the model named by `--model`. The only accepted value; anything else is rejected by argparse's `choices`. |
+| `--connection:status` | -- | Receiver role: probe the off-board host once (Ethernet then Wi-Fi) and print `UP`/`DOWN`, latency and failure count. Also writes `var/model_conn/status.json`. |
+| `--connection:ping` | -- | Receiver role: run several probes (`receiver.ping_count` in config) and print aggregate latency/loss stats, rather than a single check. |
+| `--vision:status` | -- | Print what `neo_perception` currently sees, read from its status file -- needs `neo --webapp up` (or another perception-owning process) already running; this command does not open a camera itself. |
+| `--prompt` | `TEXT` | Ask the assistant `TEXT` directly through the same `chat.ask()` path the panel's Dialog tab and voice loop use, print the reply, and exit. Refused if `TEXT` is empty/whitespace-only. |
+| `--webapp` | -- | Switch to the admin-panel subcommand surface -- see the `neo --webapp <subcommand>` table below. Every flag after the subcommand is forwarded verbatim to that subcommand's own parser. |
+| `--tls` | -- | Switch to the mTLS subcommand surface -- see the `neo --tls <subcommand>` table below. |
+| `--config` | `PATH` | Override `config/model_conn.yaml` with exactly this file (no local-file merge). Applies only to `up`, `--connection:status`, `--connection:ping` and `--prompt` -- **not** to `--webapp ...`, which has its own, separate `--config` forwarded to `neo_webapp`. |
+
+#### `neo --webapp <subcommand>`
+
+| Subcommand | Forwards to | Extra flags accepted (forwarded, not parsed by `neo` itself) |
+|---|---|---|
+| `up` | `neo_webapp.__main__` | See the `neo-webapp` table below. |
+| `setup` | `neo_webapp.scripts.setup_admin` | See the `neo --webapp setup` table below. |
+| `devcert` | `neo_webapp.scripts.make_dev_cert` | None. Mints a self-signed dev certificate at the paths `config/webapp.yaml` names; takes no arguments and reads no environment variables. |
+
+Anything typed after the subcommand that `neo`'s own top-level parser (the
+table above) does not recognize is passed straight through, unparsed, to that
+subcommand's own `main()` -- which is what lets `neo --webapp up --config
+other.yaml` mean *neo_webapp's* `--config`, distinct from the top-level `neo
+--config` in the first table.
+
+**`neo-webapp` (i.e. `neo --webapp up`)**
+
+| Flag | Takes | Meaning |
+|---|---|---|
+| `--config` | `PATH` | Use exactly this webapp YAML config file instead of the merged `config/webapp.yaml` + `config/webapp.local.yaml`. |
+| `--host` | `HOST` | Override `server.host` from config (e.g. bind to `0.0.0.0` to accept connections from other devices, or `127.0.0.1` to restrict to this machine). |
+| `--port` | `INT` | Override `server.port` from config. |
+| `--backend` | `auto`\|`mock`\|`ros` | Which robot bridge to run against. `auto` picks `ros` if `rclpy`+`neo_msgs` are importable, else falls back to `mock`. `mock` forces the simulated robot (`MockBridge`) even when ROS is available -- useful for developing the panel without disturbing a running robot. `ros` forces the real bridge and fails loudly if ROS isn't actually available, rather than silently falling back. |
+| `--no-tls` | -- | Serve plain HTTP instead of HTTPS. Browsers then refuse camera/microphone access from any device but the panel's own host (`getUserMedia` requires a secure context), so this is for command-line/API testing, not for using the webapp sources from a phone or another machine. |
+| `--log-level` | e.g. `debug`, `info`, `warning` | Uvicorn and the panel's own logger level. Default `info`. |
+
+**`neo --webapp setup`**
+
+| Argument | Takes | Meaning |
+|---|---|---|
+| `username` (positional, optional) | string | Which account to create/reset. Default `admin` -- this is a single-operator console, so there is normally only ever one. |
+| `NEO_ADMIN_PASSWORD` (environment variable, not a flag) | string | Set this to skip the interactive password prompt entirely -- the non-interactive path used when provisioning the Pi over SSH (`scripts/pi/setup-user.sh` does not set it; it's for your own scripting). Unset, the command prompts twice with `getpass` and refuses if the two entries don't match. Either way the password itself is never echoed or stored -- only its argon2 hash is written to `config/webapp.local.yaml`, alongside a freshly generated session secret and a one-time recovery code that is printed once and never stored in plaintext. |
+
+#### `neo --tls <subcommand>`
+
+| Subcommand | Meaning |
+|---|---|
+| `init` | Run once, on the off-board host (the laptop). Generates the private CA (only if it doesn't already exist -- safe to re-run) plus a fresh server certificate for this machine and a fresh client certificate for the Pi. Prints the three paths to copy to the Pi. |
+| `panel` | Run on the Pi, after the CA cert+key are present there (either from `init` run locally, which they should not be, or copied over -- signing needs the *key*, not just the cert). Issues the admin panel's own server certificate from that same CA, so installing one CA on your phone trusts both the panel and the model-host link. Safe to re-run, e.g. after the Pi's hostname or address changes. |
+
+| Flag (either subcommand) | Takes | Meaning |
+|---|---|---|
+| `--config` | `PATH` | Override `config/model_conn.yaml` for this `--tls` invocation only -- a separate, minimal parser from the main one, but the same semantics. |
+
+### `neo-servo-check` -- is the servo hardware wired up and drivable?
+
+No arguments at all performs a **read-only** check (PWM/I2C permissions, the
+config that would be used) and moves nothing. Everything below is optional;
+most are mutually exclusive move modes.
+
+| Flag | Takes | Meaning |
+|---|---|---|
+| `--config` | `PATH` | Use exactly this motion config file instead of the merged `config/motion.yaml` + `config/motion.local.yaml`. |
+| `--center` | -- | *(move mode)* Drive pan and tilt to centre (a continuous-rotation servo: to neutral, i.e. stopped, not to an angle). |
+| `--pulse` | `CHANNEL US` | *(move mode)* Drive one PWM channel to one raw pulse width in microseconds -- the low-level primitive calibration is built from. `CHANNEL` is 0 or 1 for `rpi-pwm` (GPIO18/GPIO19), or 0-15 for `pca9685`. Refused outside the servo model's `min_us`-`max_us` hard limits before anything is touched. |
+| `--stop` | -- | *(move mode)* Stop sending pulses to both servos (releases/unexports the channels). The way to halt a continuous-rotation servo a crashed process left spinning. |
+| `--move` | `PAN_DEG TILT_DEG` | *(move mode)* Drive the head through the real `ServoDriver` (clamp, slew limit, deadband, watchdog) to this angle and back to `(0, 0)`. For a continuous-rotation servo this is also the first real test of the dead-reckoning estimate: refused unless both axes are already calibrated, since the angle would otherwise be a pure guess. |
+| `--hold` | `SECONDS` (default `2.0`) | How long to hold a `--center` or `--pulse` move before releasing. Ignored by `--move` (which times itself from the configured max speed) and by `--stop`. |
+| `--keep` | -- | Leave the servos actively driven when the command exits, instead of releasing after `--hold` seconds. Refused for `--pulse` on a continuous-rotation servo unless the pulse *is* neutral -- any other pulse would leave it turning indefinitely with nothing watching it. |
+| `--record-neutral` | `AXIS US` | Write a measured neutral pulse (the point in the dead-band where the servo does not turn) for `AXIS` (`pan` or `tilt`) straight into `config/motion.local.yaml`. Touches no hardware -- purely a YAML write, merged so every other key already there is left standing. Finding the actual pulse is still a physical step: drive candidates with `--pulse` and watch the shaft. |
+| `--record-speed` | `AXIS US` | Compute a measured speed at this pulse (`abs(--turns) * 360 / --seconds`) and write it to whichever side of neutral the pulse falls on (`above_us`/`above_deg_s` or `below_us`/`below_deg_s`) in `config/motion.local.yaml`. Requires `--record-neutral` for this axis to have been run already, since which measured speed applies depends on which side of neutral the *pulse* is on. Needs `--turns` and `--seconds` too. Refused if `US` equals the recorded neutral exactly (a speed measurement needs a pulse clear of it). |
+| `--turns` | `FLOAT` | Full rotations counted by hand while `--record-speed`'s pulse was running (magnitude only; direction comes from which side of neutral the pulse is on, not the sign here). Required with `--record-speed`. |
+| `--seconds` | `FLOAT` | How long that pulse ran for, in seconds -- the denominator of the deg/s calculation. Required with `--record-speed`; must be positive. |
+
+### `neo-perception-bench` -- benchmark and validate a detector backend
+
+| Flag | Takes | Meaning |
+|---|---|---|
+| `--model` | `PATH` (default `yolov8n-pose.pt`) | Which Ultralytics pose-model weights to load. |
+| `--imgsz` | `INT` (default `320`) | Inference resolution, square. `320` is the Pi 4 working point this repo's frame-rate targets assume. |
+| `--conf` | `FLOAT` (default `0.35`) | Detection confidence threshold passed straight to the Ultralytics detector. |
+| `--runs` | `INT` (default `20`) | How many inference passes to time and average for the ms/frame and fps figures. |
+| `--source` | `bus`\|`webcam`\|`PATH` (default `bus`) | Where the benchmark frame comes from: `bus` downloads Ultralytics' own documented sample photo (has people in it), `webcam` grabs one frame from the default camera, or any other value is treated as an image file path. |
+
+### `scripts/pi/setup-system.sh` -- provision a fresh Pi (run as root, once)
+
+| Flag | Takes | Meaning |
+|---|---|---|
+| `--eth-address` | `CIDR` (default `192.168.50.2/24`) | Static address to assign `eth0` -- the Ethernet path of the dual-path link to the off-board host. |
+| `--with-panel-service` | -- | Install and enable a `neo-panel.service` systemd unit, so the admin panel starts on boot rather than needing a manual `neo --webapp up`. |
+| `--servo-pwm` | -- | Enable the Pi's hardware PWM on GPIO18/GPIO19 (`dtoverlay=pwm-2chan`) for servos wired straight to the Pi, add the `pwm` group and udev rule so `neo-servo-check` needs no root, and disable the 3.5 mm audio jack (it shares that same hardware block) -- the speaker must then be USB. |
+| `-h`, `--help` | -- | Print the usage block from the top of the script and exit. |
+
+Any other flag is rejected with `unknown option: ... (try --help)`.
+
+### `scripts/pi/setup-user.sh` -- the per-user half (run as the robot's own user, NOT root)
+
+| Argument | Takes | Meaning |
+|---|---|---|
+| `--skip-tests` (positional, i.e. must be the first argument) | -- | Skip running every package's test suite at the end. Everything else (venv creation, `pip install`, writing missing per-machine config files, the `colcon build`) still happens. |
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `NEO_VENV` | `~/neo-venv` | Where to create the Python virtual environment. |
+| `NEO_EXTRAS` | `dev,detector,voice,servo` | Which `pip install -e ".[...]"` extras to install into it. |
+| `NEO_LAPTOP_ETH` | `192.168.50.1` | The off-board host's static Ethernet address, written into the per-machine config this script generates. |
+
+### `scripts/pi/sync-to-pi.sh` -- copy this checkout to the robot (run from the laptop)
+
+| Argument | Takes | Meaning |
+|---|---|---|
+| `--dry-run` (must come first, if given) | -- | List what would be sent, and confirm no secret is among it (certs, `*.local.yaml`), without touching the network. |
+| `[user@host]` (positional, optional) | string (default `neo@neo-pi.local`) | The Pi's SSH target. |
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `NEO_SSH_KEY` | `~/.ssh/id_ed25519_neo` if present | Which SSH private key to authenticate with. |
+
 ## Not built yet
 
 - **The wake word** — which is also the gate speech is missing. Recognition
