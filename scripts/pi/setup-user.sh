@@ -27,6 +27,25 @@ if [ "$(id -u)" -eq 0 ]; then
   echo "do not run this as root; it builds your user's venv and ROS workspace" >&2
   exit 1
 fi
+
+# The system python3, explicitly -- not whatever "python3" resolves to on
+# PATH. A conda/miniforge install with its base environment auto-activated
+# (a `(base)` shell prompt) puts its own python3 ahead of /usr/bin's, and ROS's
+# apt-installed Python tooling (catkin_pkg, python3-pytest, ament's own deps)
+# is installed for /usr/bin/python3, not for whatever environment happened to
+# be active in the shell that ran this script. Same failure shape as the pip
+# venv + sourced ROS conflict CLAUDE.md already documents -- conda is just
+# another python manager that can shadow the interpreter ROS needs.
+SYSTEM_PYTHON=/usr/bin/python3
+if [ ! -x "$SYSTEM_PYTHON" ]; then
+  echo "$SYSTEM_PYTHON not found; run scripts/pi/setup-system.sh first" >&2
+  exit 1
+fi
+if command -v conda >/dev/null 2>&1 || [ -n "${CONDA_PREFIX:-}" ]; then
+  echo "note: conda detected in this shell -- forcing $SYSTEM_PYTHON for the venv" \
+       "and /usr/bin ahead of PATH inside ros_shell (below), so neither the venv" \
+       "nor colcon accidentally build against conda's python3 instead."
+fi
 if [ ! -f "/opt/ros/$ROS_DISTRO/setup.bash" ]; then
   echo "ROS 2 $ROS_DISTRO is not installed; run: sudo bash $REPO_DIR/scripts/pi/setup-system.sh" >&2
   exit 1
@@ -36,6 +55,10 @@ fi
 # allows for colcon. ROS's setup scripts read unset variables, hence +u.
 ros_shell() {
   (
+    # Re-prepend the system dirs so `python3` (and anything colcon/ament shell
+    # out to) resolves to /usr/bin's, regardless of what a conda/pyenv/nvm
+    # install ahead of it on the calling shell's PATH would otherwise win.
+    export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
     set +u
     # shellcheck disable=SC1090
     source "/opt/ros/$ROS_DISTRO/setup.bash"
@@ -47,8 +70,13 @@ ros_shell() {
 
 step "Python venv at $VENV"
 # --system-site-packages keeps rclpy importable once ROS is sourced, which the
-# panel's ROS bridge needs -- the same shape as the WSL dev setup.
-[ -x "$VENV/bin/python" ] || python3 -m venv --system-site-packages "$VENV"
+# panel's ROS bridge needs -- the same shape as the WSL dev setup. Built from
+# $SYSTEM_PYTHON explicitly, not bare `python3`: a venv built from conda's
+# python3 would still take --system-site-packages, just pointed at conda's
+# site-packages instead of the system dist-packages rclpy actually lives in --
+# wrong silently, not with an error, and only noticed the first time the panel
+# tries the `ros` backend.
+[ -x "$VENV/bin/python" ] || "$SYSTEM_PYTHON" -m venv --system-site-packages "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip wheel
 
 case ",$EXTRAS," in

@@ -126,7 +126,7 @@ add-apt-repository -y universe
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl git build-essential \
-  python3-venv python3-dev python3-pip \
+  python3-venv python3-dev python3-pip python3-pytest \
   i2c-tools v4l-utils alsa-utils iw \
   avahi-daemon libnss-mdns
 
