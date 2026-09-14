@@ -13,6 +13,10 @@
   <!-- chat.py calls into model_conn's link for the off-board host. -->
   <exec_depend>model_conn</exec_depend>
 
+  <!-- test_vision_context.py monkeypatches neo_perception.status_store directly.
+       Test-only: chat.py's own import of it stays lazy and optional at
+       runtime (a missing camera process is not an error, see chat.py). -->
+  <test_depend>neo_perception</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>

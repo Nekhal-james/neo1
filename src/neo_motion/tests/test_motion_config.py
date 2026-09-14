@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import sys
 import types
@@ -178,6 +179,13 @@ def robot(monkeypatch, tmp_path):
 def test_make_backend_with_no_calibrations_builds_from_the_config(robot, caplog):
     """It used to raise TypeError: the PCA9685 backend needs calibrations, and the
     servo node called make_backend() with none."""
+    # Forces pytest's log-capture handler onto the root logger for this test.
+    # Under colcon's system pytest + the ament/launch-testing plugins, the
+    # default auto-attached handler is sometimes missing when this fires --
+    # confirmed by the message landing on stderr via logging's lastResort
+    # fallback instead of being captured, which only happens with no handler
+    # attached anywhere in the hierarchy.
+    caplog.set_level(logging.WARNING)
     backend = make_backend("auto")
     assert isinstance(backend, Pca9685Backend)
     assert (backend.pan_cal.min_us, backend.pan_cal.max_us) == (1200, 1800)

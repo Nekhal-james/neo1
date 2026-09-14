@@ -18,7 +18,11 @@ import pytest
 
 from model_conn import certs, tls
 from model_conn.config import Config
-from model_conn.tls_proxy import start_proxy_thread
+
+pytest.importorskip("uvicorn", reason="fastapi/uvicorn are pip-only (see neo_webapp), not "
+                                       "installed under colcon test's system Python")
+
+from model_conn.tls_proxy import start_proxy_thread  # noqa: E402 -- after the guard above
 
 
 def _free_port() -> int:

@@ -8,6 +8,7 @@ and udev rule behave the same -- that is checked on the Pi.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -201,6 +202,8 @@ def test_a_positional_config_drives_the_pis_hardware_pwm(sysfs, monkeypatch, tmp
 
 
 def test_without_pwm_hardware_auto_falls_back_and_says_how_to_enable_it(tmp_path, monkeypatch, caplog):
+    # See the identical comment in test_motion_config.py's caplog test.
+    caplog.set_level(logging.WARNING)
     monkeypatch.setattr(backend_module, "PWM_ROOT", tmp_path / "no-pwm")
     monkeypatch.setenv("NEO_MOTION_CONFIG", str(REPO_CONFIG))
     assert isinstance(make_backend("auto"), MockServoBackend)
