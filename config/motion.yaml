@@ -1,0 +1,44 @@
+# Neo's head servos -- committed defaults. No secrets in this file.
+#
+# Measured calibration goes in config/motion.local.yaml on the robot (gitignored,
+# and never copied by scripts/pi/sync-to-pi.sh), merged over this file key by
+# key. Wiring and how to measure the calibration: docs/hardware.md.
+
+servo:
+  # mg995-360: the robot's servos. MG995s that rotate continuously: the pulse
+  #   sets speed, not angle, so the head's angle is estimated, not known, and
+  #   the head is not driven at all until each servo is calibrated (below).
+  # mg995: the positional (180 deg) MG995, if the servos are ever swapped.
+  model: mg995-360
+
+  # How the servos' signal wires reach them:
+  #   rpi-pwm   straight to the Pi's hardware PWM pins, GPIO18 (pin 12) and
+  #             GPIO19 (pin 35). Needs `sudo bash scripts/pi/setup-system.sh
+  #             --servo-pwm` once, then a reboot.
+  #   pca9685   to a PCA9685 board on I2C (positional servos only).
+  driver: rpi-pwm
+
+  i2c_bus: 1        # pca9685 only: GPIO 2 (SDA) / GPIO 3 (SCL)
+  address: 0x40     # pca9685 only: the board's default
+  # pwm_chip: 0     # rpi-pwm only, if the Pi's PWM controller is not found automatically
+
+# A continuous-rotation axis is calibrated once all four of neutral_us,
+# deadband_us, speed_offset_us and speed_deg_s are measured (docs/hardware.md,
+# "Calibrating"). min_deg/max_deg limit the *estimated* angle either side of
+# where the head points when the servos start; left out, it is +/-30 deg.
+# Example, after calibrating (in motion.local.yaml):
+#
+#   pan:
+#     neutral_us: 1447          # the middle of the band of pulses where it stays still
+#     deadband_us: 60           # half that band's width
+#     speed_offset_us: 150      # speeds measured this far above and below neutral
+#     speed_deg_s: 58.5         # above neutral: turns counted x 360 / seconds
+#     speed_below_deg_s: 81     # below neutral, if it differs (it often does)
+#     min_deg: -60
+#     max_deg: 60
+pan:
+  channel: 0        # rpi-pwm: 0 = GPIO18, pin 12
+  inverted: false
+tilt:
+  channel: 1        # rpi-pwm: 1 = GPIO19, pin 35
+  inverted: false

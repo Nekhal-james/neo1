@@ -62,9 +62,10 @@ class HeadPose:
 class AxisLimits:
     """One axis's mechanical and safety envelope.
 
-    Defaults are a placeholder until Phase 0's calibration measures the real
-    ones per servo into `neo_bringup/config/servos.yaml`; nothing should ship to
-    hardware on these numbers.
+    Defaults are a placeholder. On the robot they are narrowed to each servo's
+    calibration (`neo_motion.config.MotionConfig.head_limits`, measured into
+    `config/motion.local.yaml`), so the driver never commands past what the
+    servo was measured to reach.
     """
 
     min_rad: float = math.radians(-90.0)
@@ -87,11 +88,26 @@ class AxisLimits:
     0.1 deg. The first reads as a twitch, the second as drift.
 
     There is no way to have both: refusing sub-deadband corrections *is* what
-    quantizes a slow ramp. The only lever is the size. For scale, a PCA9685
-    driving 500-2500 us across 180 deg resolves about 0.044 deg per step, so
-    this placeholder is roughly nine times coarser than the hardware can render
-    -- there is real room, and Phase 0 should spend it. Idle drift and tracking
-    a person at a distance are the two things that get worse if it does not.
+    quantizes a slow ramp. The only lever is the size -- but the hardware sets a
+    floor under it. A PCA9685 at 50 Hz splits its 20 ms period into 4096 steps
+    of 4.9 us, and 500-2500 us across 180 deg is about 410 of them: **0.44 deg
+    per step**, the same as this placeholder. (This said 0.044 deg and "nine
+    times of room" until the arithmetic was redone while wiring the board.) A
+    smaller deadband still smooths the *commanded* motion, but the servo only
+    moves in 0.44 deg steps regardless. On this robot the floor stays: its
+    TowerPro MG995s are specified for 50 Hz, so the usual way under it -- a
+    higher PWM frequency, for servos rated for one -- is not available. Their
+    own deadband (1-5 us, depending on the sheet) is at or below the board's
+    4.9 us step, so the PCA9685, not the servo, is the resolution limit. If the
+    MG995 turns out to follow the 1000-2000 us reading, one step is about 0.88
+    deg instead, and calibration will show it.
+
+    All of that is the PCA9685's step. Wired straight to the Pi's hardware PWM
+    (`driver: rpi-pwm`, what the robot uses), the pulse is set in nanoseconds,
+    the 4.9 us step is gone, and the servo's own 1-5 us deadband is the floor --
+    so a smaller deadband here would buy real smoothness. How finely the Pi's
+    PWM block actually renders those nanoseconds is to be measured on the Pi,
+    not assumed, before this placeholder is tuned down.
     """
 
     def clamp(self, value: float) -> float:

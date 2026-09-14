@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 
 from ..backend import ServoBackend, make_backend
+from ..config import MotionConfig
 from ..driver import ServoDriver
 from ..types import HeadLimits
 
@@ -72,13 +73,19 @@ class ServoDriverNode:
         self,
         limits: HeadLimits | None = None,
         backend: ServoBackend | None = None,
+        config: MotionConfig | None = None,
     ) -> None:
         ok, why = probe()
         if not ok:
             raise RuntimeError(f"ROS servo driver unavailable: {why}")
+        config = config or MotionConfig.load()
         self.driver = ServoDriver(
-            limits=limits or HeadLimits(),
-            backend=backend or make_backend(),
+            # Never wider than the calibration, or /head/state reports a pose the
+            # servo was clamped short of.
+            limits=config.head_limits(limits),
+            # The configured driver by name, never `auto`: on the robot, missing
+            # PWM hardware must be an error, not a silent mock.
+            backend=backend or make_backend(config.driver, **config.backend_kwargs()),
         )
         raise NotImplementedError("phase-3: bind /head/command, /head/state, /head/estop")
 

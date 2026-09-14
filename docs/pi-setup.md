@@ -105,8 +105,10 @@ bash ~/neo1/scripts/pi/setup-user.sh
 ```
 
 `setup-system.sh` accepts `--eth-address 192.168.50.2/24` to change the static
-address, and `--with-panel-service` to install the admin panel as a systemd
-unit that survives reboots. Both scripts are idempotent: after a failure, fix
+address, `--with-panel-service` to install the admin panel as a systemd
+unit that survives reboots, and `--servo-pwm` when the servos' signal wires go
+straight to the Pi's hardware PWM pins (see [hardware.md](hardware.md); it turns
+off the 3.5 mm audio jack). Both scripts are idempotent: after a failure, fix
 the cause and re-run. After syncing a newer checkout, re-run `setup-user.sh`.
 
 What the system script sets up, and why each one:
@@ -116,7 +118,8 @@ What the system script sets up, and why each one:
 | ROS 2 Jazzy `ros-base` + CycloneDDS | no desktop on a headless Pi |
 | `rosdep install` over `src/` | the command CI runs; the six pip-owned packages carry `COLCON_IGNORE` and are skipped |
 | `neo` in `i2c`, `video`, `audio`, `dialout` | servo driver, camera and mic without root |
-| `dtparam=i2c_arm=on` | the PCA9685 lives on I2C-1 |
+| `dtparam=i2c_arm=on` | the PCA9685 lives on I2C-1 ([wiring](hardware.md)) |
+| `noble-updates` in the apt sources | some Pi images ship without it, and then ROS cannot install |
 | `avahi-daemon` | makes `neo-pi.local` resolve from the laptop and your phone |
 | eth0 = `192.168.50.2/24`, DHCP kept | the plan's fixed address for the laptop link (plan Phase 0, step 4) |
 | Wi-Fi power saving off | power-save naps look like a flapping failover path |
@@ -160,6 +163,7 @@ ros2 interface show neo_msgs/msg/HeadCommand
 
 # Hardware, once it is wired:
 i2cdetect -y 1                  # the PCA9685 answers at 0x40
+~/neo-venv/bin/neo-servo-check  # read-only; wiring and the next steps: docs/hardware.md
 rpicam-hello --list-cameras     # or `cam -l`; Bench A in the plan
 arecord -l                      # the USB mic
 

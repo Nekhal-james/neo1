@@ -76,6 +76,7 @@ class UltralyticsDetector(Detector):
 
     def _load(self):
         if self._model is None:
+            # pyrefly: ignore [missing-import]
             from ultralytics import YOLO  # imported lazily: heavy, and absent in CI
 
             log.info("loading detector %s", self.cfg.model)
@@ -83,6 +84,7 @@ class UltralyticsDetector(Detector):
         return self._model
 
     def warmup(self) -> None:
+        # pyrefly: ignore [missing-import]
         import numpy as np
 
         blank = np.zeros((self.cfg.imgsz, self.cfg.imgsz, 3), dtype="uint8")
@@ -216,6 +218,7 @@ def make_detector(backend: str = "auto", config: UltralyticsConfig | None = None
         return MockDetector()
     if backend in ("auto", "ultralytics"):
         try:
+            # pyrefly: ignore [missing-import]
             import ultralytics  # noqa: F401
         except ImportError:
             if backend == "ultralytics":

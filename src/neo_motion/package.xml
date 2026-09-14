@@ -13,12 +13,15 @@
   <!-- Required only by the ROS nodes; the core is pure Python. -->
   <exec_depend>neo_msgs</exec_depend>
   <!--
-    The PCA9685 driver is imported lazily by Pca9685Backend and is not a
-    dependency of anything else here: the mock backend is what the tests and the
-    admin panel run against, so this package installs and passes its suite on a
-    machine with no I2C bus.
+    Pca9685Backend writes the chip's registers over I2C with smbus2, imported
+    lazily: the mock backend is what the tests and the admin panel run against,
+    so this package installs and passes its suite on a machine with no I2C bus.
+    Not Adafruit's CircuitPython driver, which cannot be imported on Ubuntu for
+    the Pi without a GPIO library; see neo_motion/backend.py. (No double
+    hyphens anywhere in an XML comment: one here made the whole file invalid,
+    and rosdep, reading every package.xml under src/, stopped the Pi setup.)
   -->
-  <exec_depend>python3-adafruit-circuitpython-pca9685-pip</exec_depend>
+  <exec_depend>python3-smbus2</exec_depend>
 
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

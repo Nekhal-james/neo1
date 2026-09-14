@@ -78,9 +78,47 @@ roughly one deadband — a 2° idle sine renders as 58 jumps of 0.43° over 30 s
 the current 0.4° placeholder, against 256 jumps of 0.12° at 0.1°.
 
 There is no way to have both; refusing sub-deadband corrections *is* what
-quantizes a slow ramp. The only lever is the size, and a PCA9685 resolves about
-0.044°, so Phase 0's calibration has roughly 9× of room to spend. Idle drift and
-tracking someone at a distance are what get worse if it does not.
+quantizes a slow ramp. The only lever is the size, and the hardware puts a floor
+under it: a PCA9685 at 50 Hz resolves about **0.44°** per step (4.9 µs of a
+2000 µs range over 180°), the same as the placeholder deadband, so a smaller
+deadband smooths the commanded motion but not the servo's. The usual way under
+that floor is a higher PWM frequency, and it is not available here: the robot's
+TowerPro MG995s are specified for 50 Hz. See
+[docs/hardware.md](../../docs/hardware.md).
+
+## Servo config and calibration
+
+`config/motion.yaml` says which servo drives the head (`mg995`), how its signal
+reaches it, which channel each axis is on, and each axis's calibration. The
+robot uses `driver: rpi-pwm` — signal wires straight to the Pi's hardware PWM
+pins, GPIO18 (pan) and GPIO19 (tilt), driven through `/sys/class/pwm` by
+`RpiPwmBackend`; `driver: pca9685` drives a PCA9685 board over I2C instead.
+Neither is software PWM, which twitches whenever YOLO has the CPU. The measured
+calibration goes in `config/motion.local.yaml`,
+the robot's measured numbers go in `config/motion.local.yaml`, merged over it.
+`neo_motion.config.MotionConfig` loads it and refuses anything incomplete or
+unknown, naming every problem at once.
+
+**The robot's servos are continuous-rotation (360°) MG995s** (`model: mg995-360`),
+with no position sensor. Their pulse sets speed, not angle, so
+`RpiPwmContinuousBackend` dead-reckons: each `ContinuousAxis` turns the angle
+the driver wants into a speed through the servo's measured neutral pulse, stop
+band and speed, and adds up what it commanded. The angle is an estimate that
+drifts from wherever the head pointed at start-up. Every way the driver holds
+still — its hold, watchdog and e-stop all rewrite the current pose — arrives as
+neutral, which stops these servos; a 150 ms stall watchdog covers a process that
+stops writing, and `neo-servo-check --stop` covers one that was killed. Until
+calibrated, the backend refuses to drive them.
+
+For positional servos (`model: mg995`), until an axis is calibrated it is held to
+**1200–1800 µs, labelled ±27°**. The
+MG995's published pulse ranges disagree (0.5–2.5 ms or 1–2 ms for 180°), and
+that window is clear of the end stops under either; driving a servo into its
+stop stalls it at over an amp. The label is exact under the first reading only
+(under the second the head turns about ±54°), which calibration settles. The driver's soft limits are narrowed to the
+calibration too (`MotionConfig.head_limits`), so it never reports a pose the
+servo was clamped short of. `neo-servo-check --pulse CHANNEL US` is how the
+real limits get measured.
 
 ## Running it without a robot
 

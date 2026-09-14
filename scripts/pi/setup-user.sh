@@ -9,14 +9,14 @@
 # the two ROS packages, and runs every test suite. Idempotent.
 #
 # Environment overrides: NEO_VENV (default ~/neo-venv),
-# NEO_EXTRAS (default dev,detector,voice), NEO_LAPTOP_ETH (default 192.168.50.1).
+# NEO_EXTRAS (default dev,detector,voice,servo), NEO_LAPTOP_ETH (default 192.168.50.1).
 
 set -euo pipefail
 
 ROS_DISTRO=jazzy
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV="${NEO_VENV:-$HOME/neo-venv}"
-EXTRAS="${NEO_EXTRAS:-dev,detector,voice}"
+EXTRAS="${NEO_EXTRAS:-dev,detector,voice,servo}"
 LAPTOP_ETH="${NEO_LAPTOP_ETH:-192.168.50.1}"
 RUN_TESTS=1
 [ "${1:-}" = "--skip-tests" ] && RUN_TESTS=0
@@ -51,10 +51,33 @@ step "Python venv at $VENV"
 [ -x "$VENV/bin/python" ] || python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip wheel
 
+case ",$EXTRAS," in
+  *,detector,*)
+    step "PyTorch, CPU-only build (before ultralytics can pull the CUDA one)"
+    # ultralytics depends on torch, and PyPI's aarch64 torch is the build for
+    # NVIDIA's arm64 servers: measured on the Pi, torch 2.14.0 from PyPI pulled
+    # cuDNN, cuBLAS, NCCL and the rest of CUDA 13 -- 1.3 GB cached before it was
+    # stopped, several GB to go, for a board with no NVIDIA GPU. PyTorch's own
+    # CPU index has the same versions with none of that. Installed first, it
+    # satisfies ultralytics' requirement, so pip never looks at PyPI's.
+    if "$VENV/bin/python" -c "import torch, sys; sys.exit(0 if '+cpu' in torch.__version__ else 1)" 2>/dev/null; then
+      echo "already present: $("$VENV/bin/python" -c 'import torch; print(torch.__version__)')"
+    else
+      "$VENV/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+    fi
+    ;;
+esac
+
 step "repo with extras [$EXTRAS]"
-# torch arrives with ultralytics. PyPI's aarch64 wheels are CPU-only already, so
-# the multi-gigabyte CUDA download that x86 Linux has to dodge does not happen.
 "$VENV/bin/python" -m pip install -e "$REPO_DIR[$EXTRAS]"
+# nvidia-ml-py is exempt: ultralytics requires it, and it is a 53 kB pure-Python
+# binding that does nothing without a GPU. What must not be here is CUDA itself.
+cuda_pkgs="$("$VENV/bin/python" -m pip list 2>/dev/null | awk 'tolower($1) ~ /^(nvidia-|cuda-)/ && tolower($1) != "nvidia-ml-py" {print $1}')"
+if [ -n "$cuda_pkgs" ]; then
+  echo "NVIDIA/CUDA packages were installed into $VENV; the Pi cannot use them:" $cuda_pkgs >&2
+  echo "remove them: $VENV/bin/pip uninstall -y $cuda_pkgs" >&2
+  exit 1
+fi
 
 step "per-machine config (only files that do not exist yet)"
 mkdir -p "$REPO_DIR/config"
@@ -134,6 +157,15 @@ if [ "$RUN_TESTS" = 1 ]; then
   fi
 fi
 
+case ",$EXTRAS," in
+  *,servo,*)
+    step "servo board (read-only: nothing moves)"
+    # Informational. No board wired yet is a normal state during setup, so it
+    # does not fail the script; the check names what is missing either way.
+    "$VENV/bin/neo-servo-check" || echo "(not an error for setup: wire the PCA9685 and re-run $VENV/bin/neo-servo-check)"
+    ;;
+esac
+
 step "user setup complete"
 cat <<NEXT
 Still yours to do (each needs a password or a secret, so no script does it):
@@ -143,5 +175,6 @@ Still yours to do (each needs a password or a secret, so no script does it):
   3. Link mTLS:                see docs/security.md
 
 Run the panel:                 $VENV/bin/neo --webapp up
+Check the servo board:         $VENV/bin/neo-servo-check   (add --center to move them)
 Use ROS in a shell:            source /opt/ros/$ROS_DISTRO/setup.bash && source $REPO_DIR/install/setup.bash
 NEXT

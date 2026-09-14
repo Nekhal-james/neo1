@@ -20,7 +20,7 @@ been started; the campus knowledge base is partly built (see below).
 |---|---|---|
 | [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, Audio, Dialog and Data tabs live (Data edits the campus files, checks them, and tries questions against them); password change and recovery-code reset; Emotion/Logs are stubs filled in by later phases |
 | [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification |
-| [`neo_motion`](src/neo_motion/README.md) | Phase 3 — head arbitration and the servo driver | Priority arbiter with crossfade and source expiry; driver enforcing clamp/slew/deadband/watchdog/e-stop against a mock or PCA9685 backend |
+| [`neo_motion`](src/neo_motion/README.md) | Phase 3 — head arbitration and the servo driver | Priority arbiter with crossfade and source expiry; driver enforcing clamp/slew/deadband/watchdog/e-stop against a mock backend, the Pi's hardware PWM (the robot's wiring: continuous-rotation MG995s on GPIO18/19, head angle dead-reckoned), or a PCA9685; per-axis calibration in `config/motion.yaml`, and continuous servos are not driven until it is measured |
 | [`neo_emotion`](src/neo_emotion/README.md) | Phase 9 — mood and the movement it shapes | Event-driven state machine with dwell times; idle drift, micro-motion, and bounded gesture overlays. Publishes parameters only — no path to the servos |
 | [`model_conn`](src/model-conn/README.md) | Phase 6 (partial) — the off-board LLM host/receiver link | CLI for serving the model (host) and checking the link (receiver); real mTLS via a private CA (`neo --tls init`) |
 | [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; streaming Vosk STT and sentence-streamed Piper TTS, joined into a spoken conversation on the panel's Audio tab; Neo's system prompt; vectorless retrieval over `rooms`/`graph`/`coverage` YAML (whole-phrase matching on codes, names and aliases, spoken numbers folded in), sent to the model as only the matched entries and answered from templates when the model host is away |
@@ -32,7 +32,7 @@ All of them run with no Pi, no ROS, and no servos attached — `neo_webapp` via 
 mock servo backend, `neo_perception` against any camera the panel is using,
 `model_conn`/`intelligence` against whatever endpoints you point them at.
 
-735 tests. Run each package from inside its own directory
+872 tests. Run each package from inside its own directory
 (`cd src/neo_webapp && python -m pytest -q`) — the per-package `tests/conftest.py`
 files collide if you point pytest at `src/` as a whole. `neo_msgs` and
 `neo_bringup` are tested the same way with plain pytest: their tests read the
@@ -72,7 +72,7 @@ is what validates the message contracts as IDL rather than as text.
 
 Not yet: it cannot wake to its own name or answer a campus question from real
 data. The motion stack is complete and the panel drives it, but against a mock
-servo backend — no PCA9685 has been wired up yet. Speech works, but it is not yet *gated* by the wake
+servo backend — no servo has been driven by it yet (the MG995s wire straight to the Pi's hardware PWM pins; see [docs/hardware.md](docs/hardware.md)). Speech works, but it is not yet *gated* by the wake
 word — on the panel, opening the mic channel is what opens the listening
 window. See *Not built yet* below.
 

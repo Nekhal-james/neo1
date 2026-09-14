@@ -1,0 +1,9 @@
+# Neo: let the pwm group drive the Raspberry Pi's hardware PWM -- the head
+# servos' signal wires on GPIO18 (pin 12) and GPIO19 (pin 35). Installed by
+# scripts/pi/setup-system.sh --servo-pwm.
+#
+# The kernel creates /sys/class/pwm files root-only, and exporting a channel
+# creates more of them, so this runs on every pwm event, the exports included.
+# /sys/class/pwm/pwmchipN is a symlink that chgrp -R does not follow, hence the
+# real device path as well.
+SUBSYSTEM=="pwm*", PROGRAM="/bin/sh -c 'chgrp -R pwm /sys/class/pwm/ /sys/devices/platform/soc/*.pwm/pwm/ && chmod -R g+rw /sys/class/pwm/ /sys/devices/platform/soc/*.pwm/pwm/'"

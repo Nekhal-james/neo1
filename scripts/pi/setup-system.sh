@@ -7,6 +7,9 @@
 #
 #   --eth-address CIDR     static address for eth0 (default 192.168.50.2/24)
 #   --with-panel-service   install and enable neo-panel.service
+#   --servo-pwm            servos wired straight to the Pi: enable its hardware
+#                          PWM on GPIO18/19 and let the user drive it (turns off
+#                          the 3.5 mm audio jack, which shares that hardware)
 #
 # The system half of plan Phase 0: packages, ROS 2 Jazzy, device access, mDNS,
 # the Ethernet link, DDS pinning. It needs no password and no secret beyond the
@@ -20,13 +23,15 @@ set -euo pipefail
 ROS_DISTRO=jazzy
 ETH_ADDRESS="192.168.50.2/24"
 WITH_PANEL_SERVICE=0
+SERVO_PWM=0
 REBOOT_NEEDED=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --eth-address) ETH_ADDRESS="$2"; shift 2 ;;
     --with-panel-service) WITH_PANEL_SERVICE=1; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    --servo-pwm) SERVO_PWM=1; shift ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -80,6 +85,39 @@ echo "ok"
 # --- packages ----------------------------------------------------------------
 
 export DEBIAN_FRONTEND=noninteractive
+
+step "Ubuntu package sources include ${VERSION_CODENAME}-updates"
+# Some Raspberry Pi Ubuntu images ship with "Suites: noble" and noble-security
+# only, while their installed libraries already come from noble-updates. apt
+# then finds libzstd1 1.5.5+dfsg2-2build1.1 installed but only a -dev package
+# pinned to 2build1, and every ROS install fails with "held broken packages".
+# Measured on a Pi 4 flashed with 24.04.4: acl, libacl1-dev, liblz4-dev and
+# libzstd-dev all refused. A standard Ubuntu install carries noble-updates.
+sources=/etc/apt/sources.list.d/ubuntu.sources
+updates="${VERSION_CODENAME}-updates"
+if [ -f "$sources" ]; then
+  if grep -qE "^Suites:.*[[:space:]]${updates}([[:space:]]|$)" "$sources"; then
+    echo "already present"
+  else
+    cp -n "$sources" "$sources.before-neo"
+    sed -i -E "s/^Suites:[[:space:]]*${VERSION_CODENAME}[[:space:]]*$/Suites: ${VERSION_CODENAME} ${updates}/" "$sources"
+    if ! grep -qE "^Suites:.*[[:space:]]${updates}([[:space:]]|$)" "$sources"; then
+      echo "could not add $updates to $sources (no plain 'Suites: $VERSION_CODENAME' line); add it by hand and re-run" >&2
+      exit 1
+    fi
+    echo "added $updates (original kept as $sources.before-neo)"
+  fi
+elif [ -f /etc/apt/sources.list ] && ! grep -qE "^deb .*[[:space:]]${updates}[[:space:]]" /etc/apt/sources.list; then
+  main_line="$(grep -m1 -E "^deb [^ ]+ ${VERSION_CODENAME} " /etc/apt/sources.list || true)"
+  if [ -z "$main_line" ]; then
+    echo "no '$VERSION_CODENAME' line in /etc/apt/sources.list to base $updates on; add it by hand and re-run" >&2
+    exit 1
+  fi
+  echo "${main_line/ ${VERSION_CODENAME} / ${updates} }" >> /etc/apt/sources.list
+  echo "added $updates to /etc/apt/sources.list"
+else
+  echo "already present"
+fi
 
 step "base packages"
 apt-get update
@@ -168,6 +206,42 @@ if [ -f "$CONFIG_TXT" ]; then
   fi
 else
   warn "$CONFIG_TXT not found (not a Raspberry Pi boot partition); skipping"
+fi
+
+if [ "$SERVO_PWM" = 1 ]; then
+  step "hardware PWM for servos on GPIO18 (pin 12) and GPIO19 (pin 35)"
+  if [ ! -f "$CONFIG_TXT" ]; then
+    echo "$CONFIG_TXT not found; cannot enable hardware PWM here" >&2
+    exit 1
+  fi
+  if [ ! -f /boot/firmware/overlays/pwm-2chan.dtbo ]; then
+    echo "/boot/firmware/overlays/pwm-2chan.dtbo is missing: this image has no hardware PWM overlay." >&2
+    echo "Wire the servos to a PCA9685 instead (driver: pca9685 in config/motion.yaml)." >&2
+    exit 1
+  fi
+  if grep -qE '^[[:space:]]*dtoverlay=pwm-2chan' "$CONFIG_TXT"; then
+    echo "overlay already enabled"
+  else
+    # Its defaults are exactly the pins Neo uses: PWM0 on GPIO18, PWM1 on GPIO19.
+    printf '\n[all]\n# Neo: head servo signals on the hardware PWM pins, GPIO18 and GPIO19\ndtoverlay=pwm-2chan\n' >> "$CONFIG_TXT"
+    echo "enabled dtoverlay=pwm-2chan in $CONFIG_TXT"
+    REBOOT_NEEDED=1
+  fi
+  # The 3.5 mm jack's analog audio comes from the same PWM block the servos now
+  # use; the two cannot share it. Neo's speaker has to be USB.
+  if grep -qE '^[[:space:]]*dtparam=audio=on' "$CONFIG_TXT"; then
+    sed -i -E 's/^([[:space:]]*)dtparam=audio=on/\1dtparam=audio=off/' "$CONFIG_TXT"
+    echo "turned off the 3.5 mm audio jack (dtparam=audio=off): it shares the PWM hardware"
+    REBOOT_NEEDED=1
+  fi
+  getent group pwm >/dev/null || groupadd --system pwm
+  usermod -aG pwm "$TARGET_USER"
+  install -m 644 "$FILES/61-neo-pwm.rules" /etc/udev/rules.d/61-neo-pwm.rules
+  if have_systemd; then
+    udevadm control --reload-rules || true
+  fi
+  echo "  + $TARGET_USER in the pwm group; udev rule installed"
+  REBOOT_NEEDED=1
 fi
 
 # --- network -----------------------------------------------------------------
