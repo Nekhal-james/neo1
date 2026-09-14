@@ -23,6 +23,7 @@ from pathlib import Path
 import yaml
 from ament_index_python.packages import (
     PackageNotFoundError,
+    get_package_prefix,
     get_package_share_directory,
 )
 from launch import LaunchDescription
@@ -71,6 +72,27 @@ def _setup(context, *args, **kwargs):
                 LogInfo(
                     msg=f"[neo_bringup] skipping '{name}': package "
                     f"{spec['package']} not built (plan phase {spec['phase']})"
+                )
+            )
+            continue
+
+        # A package can exist while one of its *other* executables does not --
+        # neo_perception ships perception_node (phase 4) but not camera_hw
+        # (phase 2) yet, and both live in the same package. Checking the
+        # package alone used to be enough, back when an unfinished package
+        # carried COLCON_IGNORE and this loop never got past the check above;
+        # once part of a package is real, that stops being true, and this is
+        # the same "unfinished project still launches" property applied one
+        # level down, at the executable colcon actually installed.
+        executable_path = (
+            Path(get_package_prefix(spec["package"])) / "lib" / spec["package"] / spec["executable"]
+        )
+        if not executable_path.is_file():
+            actions.append(
+                LogInfo(
+                    msg=f"[neo_bringup] skipping '{name}': executable "
+                    f"{spec['executable']} not built in {spec['package']} "
+                    f"(plan phase {spec['phase']})"
                 )
             )
             continue
