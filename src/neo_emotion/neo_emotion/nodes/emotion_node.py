@@ -16,12 +16,21 @@ from ..state import EmotionConfig, EmotionController, EmotionEvents
 
 log = logging.getLogger(__name__)
 
+try:
+    from rclpy.node import Node
+except ImportError:  # pragma: no cover - exercised only where ROS is installed
+    Node = object
+
 RATE_HZ = 10.0
 """Fast enough that a mood change is not visibly late, slow enough to be free.
 
 The motion it shapes is generated at 50 Hz in head_behavior from the parameters
 this publishes; the parameters themselves change on human timescales.
 """
+
+_DIALOG_SPEAKING = 3
+"""neo_msgs/DialogState.SPEAKING, mirrored as a plain int so this module needs
+no import of neo_msgs at parse time (see probe())."""
 
 
 def probe() -> tuple[bool, str]:
@@ -36,7 +45,7 @@ def probe() -> tuple[bool, str]:
     return True, "ok"
 
 
-class EmotionNode:
+class EmotionNode(Node):
     """Wiring plan (contracts in docs/IMPLEMENTATION_PLAN.md section 9.1).
 
     subscribe  /perception/attention   neo_msgs/AttentionTarget
@@ -65,9 +74,79 @@ class EmotionNode:
         ok, why = probe()
         if not ok:
             raise RuntimeError(f"ROS emotion node unavailable: {why}")
+
+        from neo_msgs.msg import AttentionTarget, DialogState, EmotionState, GestureEvent, LinkHealth
+
+        super().__init__("emotion_node")
+
         self.controller = EmotionController(config or EmotionConfig())
         self.events = EmotionEvents()
-        raise NotImplementedError("phase-9: bind /emotion/state and its inputs")
+        self._person_seen = False
+        # gesture_seen is a discrete edge, not a level: latch it in the
+        # callback and clear it once the timer has consumed it, or a single
+        # gesture would bypass the dwell timer on every tick forever.
+        self._gesture_seen_pending = False
+
+        self.create_subscription(
+            AttentionTarget, "/perception/attention", self._on_attention, 10
+        )
+        self.create_subscription(GestureEvent, "/perception/gestures", self._on_gesture, 10)
+        self.create_subscription(DialogState, "/dialog/state", self._on_dialog_state, 10)
+        self.create_subscription(LinkHealth, "/link/health", self._on_link_health, 10)
+
+        self._pub = self.create_publisher(EmotionState, "/emotion/state", 10)
+        self._timer = self.create_timer(1.0 / RATE_HZ, self._on_timer)
+        self.get_logger().info("emotion_node: publishing /emotion/state")
+
+    # -- clock -----------------------------------------------------------
+
+    def _now(self) -> float:
+        return self.get_clock().now().nanoseconds / 1e9
+
+    # -- ROS callbacks -----------------------------------------------------
+
+    def _on_attention(self, msg) -> None:
+        present = bool(msg.person_present)
+        self.events.person_arrived = present and not self._person_seen
+        self.events.person_present = present
+        self.events.engaged = bool(msg.engaged)
+        self._person_seen = present
+
+    def _on_gesture(self, msg) -> None:
+        self._gesture_seen_pending = True
+
+    def _on_dialog_state(self, msg) -> None:
+        self.events.speaking = msg.state == _DIALOG_SPEAKING
+
+    def _on_link_health(self, msg) -> None:
+        self.events.link_down = not bool(msg.up)
+
+    def _on_timer(self) -> None:
+        self.events.gesture_seen = self._gesture_seen_pending
+        self._gesture_seen_pending = False
+
+        state = self.controller.update(self.events, self._now())
+        # person_arrived is also an edge; whatever caused it has been seen now.
+        self.events.person_arrived = False
+
+        self._publish(state)
+
+    def _publish(self, state) -> None:
+        from neo_msgs.msg import EmotionState as EmotionStateMsg
+
+        msg = EmotionStateMsg()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.label = int(state.label)
+        msg.intensity = state.intensity
+        params = state.params
+        msg.idle_amplitude_deg = params.idle_amplitude_deg
+        msg.idle_freq_hz = params.idle_freq_hz
+        msg.gaze_gain = params.gaze_gain
+        msg.gaze_lag = params.gaze_lag
+        msg.tilt_bias_deg = params.tilt_bias_deg
+        msg.micro_motion = params.micro_motion
+        msg.settle_time = params.settle_time
+        self._pub.publish(msg)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,4 +155,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cannot start emotion node: {why}")
         print("The controller runs without ROS; the admin panel drives the same core.")
         return 1
-    raise NotImplementedError("phase-9: bind /emotion/state and its inputs")
+
+    import rclpy
+
+    rclpy.init(args=argv)
+    node = EmotionNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    return 0

@@ -22,10 +22,17 @@ and text-to-speech *are* built, and joined on the panel's Audio tab into a spoke
 turn (transcript → `chat.ask` → sentence-streamed reply, in `neo_webapp/voice.py`),
 but nothing gates recognition yet — the wake word is what will, and until then an
 open mic channel is the listening window. Answering out loud is a separate switch,
-off by default, because with it on the room's speech goes to the model host. The ROS *nodes* wrapping the Python cores are also not
-built — `nodes/*.py` in each package documents its wiring and raises
-`NotImplementedError`. Everything below describes the design those must follow,
-including the parts not yet written.
+off by default, because with it on the room's speech goes to the model host. The ROS *nodes* wrapping the Python
+cores now bind real rclpy pub/sub/service I/O against the contracts in
+`neo_msgs` — `nodes/*.py` in each package converts messages and calls into the
+already-tested core, per its own wiring-plan docstring. They are written
+against the frozen message definitions and pass the existing pure-Python
+suite, but nothing in this repo has run them under a live ROS graph yet: there
+is no rclpy on the machine this was written on, so `colcon build`/`colcon
+test` on an actual Jazzy install is the verification still owed before they
+are trusted the way the pure-Python cores are. Everything below describes the
+design those must follow, including any wiring detail a real ROS run turns up
+as wrong.
 
 **The admin panel runs the real motion and emotion code**, not a stand-in: its
 `MockBridge` drives `neo_motion`'s arbiter and driver and `neo_emotion`'s
@@ -60,13 +67,19 @@ prints "0 packages finished", and exits 0. A green build that built nothing is
 the failure mode to watch for here, because the colcon job is the only thing
 that validates the message contracts as real IDL rather than as text.
 
-The six Python packages carry a `COLCON_IGNORE`: they declare
-`build_type: ament_python` but deliberately have no per-package `setup.py`, so
-colcon would fail on them and take `neo_msgs` down with it. That is enough to
-run nodes — rclpy finds `neo_msgs` from the sourced overlay and the packages
-from the Python path — but *not* enough for `ros2 run` to discover their
-executables. The phase that first needs `ros2 run` for a package removes its
-`COLCON_IGNORE` and adds a `setup.py`; not before.
+Five of the six Python packages (`neo_motion`, `neo_perception`, `neo_emotion`,
+`model_conn`, `intelligence`) now carry a per-package `setup.py` and
+`console_scripts` entry points matching `neo_bringup/config/nodes.yaml`, and
+no longer carry `COLCON_IGNORE` — that landed alongside the real node bindings
+in each package's `nodes/*.py`, on the theory that a package with no way to
+run its executable had nothing for `ros2 run` to find. `neo_webapp` still
+carries `COLCON_IGNORE` and has no per-package `setup.py`: the admin panel is
+launched as `neo --webapp up`, not via `ros2 run` (`neo_bringup`'s launch file
+deliberately never starts it), so only its `bridge/ros.py` needs rclpy, as a
+client of the topics/services the other five nodes now expose. **This has not
+been proven against a real `colcon build`** — do that on a Jazzy machine
+before trusting it; a `pip install`-only environment cannot rule out a wrong
+`data_files` path or a typo'd entry point.
 
 **Do not activate a pip venv and source ROS in the same shell to run tests.**
 ROS Jazzy ships `launch_testing`, a pytest plugin built against pytest 7's hook

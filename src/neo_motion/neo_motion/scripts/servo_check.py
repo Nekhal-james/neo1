@@ -11,10 +11,24 @@
     neo-servo-check --move 20 10          drive the head through the real motion
                                           driver to pan 20, tilt 10 deg, back to 0,
                                           then stop
+    neo-servo-check --record-neutral pan 1500
+                                          write a measured neutral pulse for one
+                                          axis to config/motion.local.yaml
+    neo-servo-check --record-speed pan 1550 --turns 5.5 --seconds 40
+                                          compute deg/s from a counted measurement
+                                          and write it (needs --record-neutral first)
 
-Nothing moves without --center or --pulse. Which driver, which kind of servo, the
-channels, the PWM frequency and each axis's calibration all come from
-config/motion.yaml, merged with config/motion.local.yaml on the robot.
+Nothing moves without --center, --pulse or --move. Which driver, which kind of
+servo, the channels, the PWM frequency and each axis's calibration all come
+from config/motion.yaml, merged with config/motion.local.yaml on the robot.
+
+--record-neutral and --record-speed touch no hardware at all: they are the
+arithmetic-and-YAML half of calibrating a continuous-rotation servo (turns x
+360 / seconds, written to the right side of neutral), not the physical half --
+finding the pulse, marking the shaft and counting turns is still done by
+watching the servo (drive it with --pulse and time it yourself). Measuring
+speed needs a neutral already recorded, because which measured speed applies
+depends on which side of neutral the pulse is on (CLAUDE.md).
 
 A continuous-rotation servo told to turn keeps turning for as long as the pulse
 runs, so for those --keep is refused with any pulse but neutral, and --stop is
@@ -28,9 +42,10 @@ import math
 import os
 import sys
 import time
+from pathlib import Path
 
 from ..backend import PWM_ROOT, RPI_PWM_PINS, ContinuousCalibration, Pca9685, SysfsPwmChip, open_smbus
-from ..config import MotionConfig, MotionConfigError, ServoModel
+from ..config import LOCAL_CONFIG, MotionConfig, MotionConfigError, ServoModel, load_raw, record_calibration
 
 
 def _check_bus(bus: int) -> bool:
@@ -97,6 +112,74 @@ def _calibration_hint(continuous: bool) -> None:
         print("      back off 50 us and record that as the end.")
 
 
+def _config_path(args) -> Path:
+    return Path(args.config) if args.config else LOCAL_CONFIG
+
+
+def _record_neutral(args) -> int:
+    """The arithmetic-free half: just remembers a pulse. Finding it -- driving
+    --pulse and watching for the pulse where the shaft does not turn at all --
+    is still done by a person, the same as every other calibration step here.
+    """
+    axis, pulse_str = args.record_neutral
+    if axis not in ("pan", "tilt"):
+        print(f"FAIL  axis must be 'pan' or 'tilt', got {axis!r}")
+        return 2
+    try:
+        pulse_us = float(pulse_str)
+    except ValueError:
+        print(f"FAIL  US must be a number, got {pulse_str!r}")
+        return 2
+
+    path = _config_path(args)
+    record_calibration(axis, {"neutral_us": pulse_us}, path=path)
+    print(f"ok    {axis}: neutral_us = {pulse_us:.0f} written to {path}")
+    print("      Next: --record-speed for a pulse well clear of it, above and below.")
+    return 0
+
+
+def _record_speed(args) -> int:
+    """turns x 360 / seconds, written to whichever side of neutral the pulse
+    is on -- CLAUDE.md is explicit that speed belongs to the side the *pulse*
+    is on, not to a direction, so this needs neutral_us already recorded to
+    know which.
+    """
+    axis, pulse_str = args.record_speed
+    if axis not in ("pan", "tilt"):
+        print(f"FAIL  axis must be 'pan' or 'tilt', got {axis!r}")
+        return 2
+    if args.turns is None or args.seconds is None:
+        print("FAIL  --record-speed needs --turns and --seconds too")
+        return 2
+    if args.seconds <= 0:
+        print("FAIL  --seconds must be positive")
+        return 2
+    try:
+        pulse_us = float(pulse_str)
+    except ValueError:
+        print(f"FAIL  US must be a number, got {pulse_str!r}")
+        return 2
+
+    path = _config_path(args)
+    neutral_us = load_raw(args.config).get(axis, {}).get("neutral_us")
+    if neutral_us is None:
+        print(f"FAIL  no neutral_us recorded for {axis} yet -- run --record-neutral {axis} <US> first")
+        return 2
+    neutral_us = float(neutral_us)
+    if pulse_us == neutral_us:
+        print("FAIL  this pulse IS neutral_us; a speed measurement needs a pulse clear of it")
+        return 2
+
+    deg_s = abs(args.turns) * 360.0 / args.seconds
+    side = "above" if pulse_us > neutral_us else "below"
+    record_calibration(axis, {f"{side}_us": pulse_us, f"{side}_deg_s": deg_s}, path=path)
+    print(f"ok    {axis}: {side}_us = {pulse_us:.0f}, {side}_deg_s = {deg_s:.1f} written to {path}")
+    other = "below" if side == "above" else "above"
+    print(f"      Still needed: {other}_us and {other}_deg_s, measured the same way "
+          f"on the other side of neutral, before {axis} is calibrated.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="neo-servo-check", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -111,7 +194,20 @@ def main(argv: list[str] | None = None) -> int:
                       help="drive the head through the motion driver to this angle and back to 0")
     parser.add_argument("--hold", type=float, default=2.0, help="seconds to hold before releasing")
     parser.add_argument("--keep", action="store_true", help="leave the servos driven on exit")
+    parser.add_argument("--record-neutral", nargs=2, metavar=("AXIS", "US"),
+                        help="write AXIS's (pan or tilt) measured neutral pulse to motion.local.yaml")
+    parser.add_argument("--record-speed", nargs=2, metavar=("AXIS", "US"),
+                        help="write a measured speed at this pulse; needs --turns, --seconds, and "
+                             "--record-neutral for this axis already done")
+    parser.add_argument("--turns", type=float,
+                        help="full rotations counted while --record-speed's pulse ran (magnitude only)")
+    parser.add_argument("--seconds", type=float, help="how long that pulse ran for, in seconds")
     args = parser.parse_args(argv)
+
+    if args.record_neutral:
+        return _record_neutral(args)
+    if args.record_speed:
+        return _record_speed(args)
 
     try:
         config = MotionConfig.load(args.config)

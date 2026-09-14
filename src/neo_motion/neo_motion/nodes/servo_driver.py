@@ -16,9 +16,14 @@ import logging
 from ..backend import ServoBackend, make_backend
 from ..config import MotionConfig
 from ..driver import ServoDriver
-from ..types import HeadLimits
+from ..types import HeadCommand, HeadLimits
 
 log = logging.getLogger(__name__)
+
+try:
+    from rclpy.node import Node
+except ImportError:  # pragma: no cover - exercised only where ROS is installed
+    Node = object
 
 RATE_HZ = 50.0
 """Fixed, and not a parameter.
@@ -42,7 +47,7 @@ def probe() -> tuple[bool, str]:
     return True, "ok"
 
 
-class ServoDriverNode:
+class ServoDriverNode(Node):
     """Wiring plan (contracts in docs/IMPLEMENTATION_PLAN.md section 3.2).
 
     subscribe  /head/command      neo_msgs/HeadCommand
@@ -78,6 +83,14 @@ class ServoDriverNode:
         ok, why = probe()
         if not ok:
             raise RuntimeError(f"ROS servo driver unavailable: {why}")
+
+        from neo_msgs.msg import HeadCommand as HeadCommandMsg
+        from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+        from sensor_msgs.msg import JointState
+        from std_srvs.srv import SetBool
+
+        super().__init__("servo_driver")
+
         config = config or MotionConfig.load()
         self.driver = ServoDriver(
             # Never wider than the calibration, or /head/state reports a pose the
@@ -87,7 +100,76 @@ class ServoDriverNode:
             # PWM hardware must be an error, not a silent mock.
             backend=backend or make_backend(config.driver, **config.backend_kwargs()),
         )
-        raise NotImplementedError("phase-3: bind /head/command, /head/state, /head/estop")
+
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+        )
+        self._sub = self.create_subscription(
+            HeadCommandMsg, "/head/command", self._on_command, qos
+        )
+        self._state_pub = self.create_publisher(JointState, "/head/state", 10)
+        self._estop_srv = self.create_service(SetBool, "/head/estop", self._on_estop)
+
+        self._last_tick = self._now()
+        self._timer = self.create_timer(1.0 / RATE_HZ, self._on_timer)
+        self.get_logger().info(f"servo_driver: driving '{config.driver}' backend")
+
+    # -- clock ---------------------------------------------------------
+
+    def _now(self) -> float:
+        """Seconds on the node's own clock -- the same basis a command's stamp
+        must be measured against, whether that is wall time or, under a future
+        simulation, sim time."""
+        return self.get_clock().now().nanoseconds / 1e9
+
+    # -- ROS callbacks ---------------------------------------------------
+
+    def _on_command(self, msg) -> None:
+        from rclpy.time import Time
+
+        # The message's own header stamp, not time.time() on arrival: a command
+        # delayed in transit must still read as however old it actually is.
+        stamp = Time.from_msg(msg.header.stamp).nanoseconds / 1e9
+        self.driver.command(
+            HeadCommand(
+                pan_rad=msg.pan_rad,
+                tilt_rad=msg.tilt_rad,
+                priority=msg.priority,
+                max_speed_rad_s=msg.max_speed_rad_s,
+                stamp=stamp,
+            )
+        )
+
+    def _on_estop(self, request, response):
+        self.driver.set_estop(bool(request.data))
+        response.success = True
+        response.message = "estop engaged" if request.data else "estop released"
+        return response
+
+    def _on_timer(self) -> None:
+        now = self._now()
+        dt = now - self._last_tick
+        self._last_tick = now
+        pose = self.driver.step(now, dt)
+        self._publish_state(pose)
+
+    def _publish_state(self, pose) -> None:
+        from sensor_msgs.msg import JointState
+
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = ["pan", "tilt"]
+        msg.position = [pose.pan_rad, pose.tilt_rad]
+        self._state_pub.publish(msg)
+
+    def destroy_node(self) -> None:
+        # Centre and release, not just stop publishing -- a killed process must
+        # not leave the last pulse running (CLAUDE.md, continuous-rotation
+        # servos especially).
+        self.driver.shutdown()
+        super().destroy_node()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,4 +180,17 @@ def main(argv: list[str] | None = None) -> int:
         print("  python -c 'from neo_motion.driver import ServoDriver; ...'")
         print("or drive it from the admin panel's Head tab, which uses the same core.")
         return 1
-    raise NotImplementedError("phase-3: bind /head/command, /head/state, /head/estop")
+
+    import rclpy
+
+    rclpy.init(args=argv)
+    node = ServoDriverNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    return 0

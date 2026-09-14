@@ -32,7 +32,7 @@ All of them run with no Pi, no ROS, and no servos attached — `neo_webapp` via 
 mock servo backend, `neo_perception` against any camera the panel is using,
 `model_conn`/`intelligence` against whatever endpoints you point them at.
 
-872 tests. Run each package from inside its own directory
+886 tests. Run each package from inside its own directory
 (`cd src/neo_webapp && python -m pytest -q`) — the per-package `tests/conftest.py`
 files collide if you point pytest at `src/` as a whole. `neo_msgs` and
 `neo_bringup` are tested the same way with plain pytest: their tests read the
@@ -234,8 +234,14 @@ placeholders.
   Not built: fuzzy matching of misheard codes, the unanswered-question log,
   the evaluation set, and the `kb_service` ROS wrapper. There is no campus data
   yet; it is entered on the Data tab.
-- **The ROS nodes** wrapping the existing Python cores. Each `nodes/*.py`
-  documents its topics and raises `NotImplementedError`; the contracts they were
-  waiting on now exist, so they are unblocked.
+- **A real ROS run.** Each `nodes/*.py` now binds real rclpy pub/sub/service
+  I/O against the frozen `neo_msgs` contracts, and `neo_motion`, `neo_perception`,
+  `neo_emotion`, `model_conn` and `intelligence` carry a `setup.py` and
+  `console_scripts` entries so `colcon build --base-paths src` and `ros2 run`
+  can find them (`neo_webapp` still doesn't need either -- the panel is `neo
+  --webapp up`, not a launched node). None of this has run against a live ROS
+  graph yet, only against the existing pure-Python suite; a `colcon build` +
+  `colcon test` on an actual Jazzy machine is what is still owed before it is
+  trusted the way the rest of this table is.
 
 Full-body locomotion is out of scope until asked for.

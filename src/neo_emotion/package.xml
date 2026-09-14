@@ -21,7 +21,12 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
-  <!-- See ./COLCON_IGNORE for why there is no per-package setup.py yet. -->
+  <!--
+    Per-package setup.py landed alongside the real node binding in
+    nodes/emotion_node.py (see ../../setup.py). No more COLCON_IGNORE: colcon
+    build (base-paths src) now builds this package and ros2 run neo_emotion
+    emotion_node can find it.
+  -->
   <export>
     <build_type>ament_python</build_type>
   </export>

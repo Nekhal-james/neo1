@@ -12,7 +12,7 @@ import pytest
 from neo_motion import backend as backend_module
 from neo_motion import config as config_module
 from neo_motion.backend import Pca9685Backend, make_backend
-from neo_motion.config import MG995, MotionConfig, MotionConfigError
+from neo_motion.config import MG995, MotionConfig, MotionConfigError, load_raw, record_calibration
 from neo_motion.types import HeadLimits
 
 REPO_CONFIG = Path(__file__).resolve().parents[3] / "config" / "motion.yaml"
@@ -190,3 +190,65 @@ def test_a_broken_config_stops_the_robot_backend(robot, tmp_path, monkeypatch):
     monkeypatch.setenv("NEO_MOTION_CONFIG", str(write(tmp_path, "pan: {min_us: 700}\n")))
     with pytest.raises(MotionConfigError):
         make_backend("auto")
+
+
+# -- recording a calibration one field at a time (neo-servo-check) -----------
+
+
+def test_load_raw_reads_a_calibration_too_incomplete_to_validate(tmp_path):
+    """The whole point: MotionConfig.load() correctly refuses a lone neutral_us
+    (a fixed-speed calibration needs all five fields at once), but the tool
+    building that calibration up still has to read it back before the fourth
+    and fifth fields exist."""
+    path = write(tmp_path, "servo: {model: mg995-360}\npan: {neutral_us: 1500}\n")
+    with pytest.raises(MotionConfigError, match="neutral_us, deadband_us"):
+        MotionConfig.load(path)
+    assert load_raw(path)["pan"] == {"neutral_us": 1500}
+
+
+def test_record_calibration_creates_the_file(tmp_path):
+    path = tmp_path / "motion.local.yaml"
+    assert not path.exists()
+    record_calibration("pan", {"neutral_us": 1500.0}, path=path)
+    assert load_raw(path) == {"pan": {"neutral_us": 1500.0}}
+
+
+def test_record_calibration_leaves_every_other_key_standing(tmp_path):
+    """The same rule every other package's local config follows (CLAUDE.md):
+    naming one key must not blank the rest -- the other axis, anything already
+    measured on this one, the driver section."""
+    path = write(
+        tmp_path,
+        "servo: {driver: rpi-pwm}\n"
+        "pan: {neutral_us: 1500, above_us: 1650}\n"
+        "tilt: {neutral_us: 1490}\n",
+        "motion.local.yaml",
+    )
+    record_calibration("pan", {"above_deg_s": 58.5}, path=path)
+    raw = load_raw(path)
+    assert raw["servo"] == {"driver": "rpi-pwm"}
+    assert raw["tilt"] == {"neutral_us": 1490}
+    assert raw["pan"] == {"neutral_us": 1500, "above_us": 1650, "above_deg_s": 58.5}
+
+
+def test_record_calibration_overwrites_only_the_fields_given(tmp_path):
+    path = write(tmp_path, "pan: {above_us: 1650, above_deg_s: 50.0}\n", "motion.local.yaml")
+    record_calibration("pan", {"above_deg_s": 58.5}, path=path)
+    assert load_raw(path)["pan"] == {"above_us": 1650, "above_deg_s": 58.5}
+
+
+def test_record_calibration_rejects_an_unknown_axis(tmp_path):
+    with pytest.raises(ValueError, match="axis must be"):
+        record_calibration("roll", {"neutral_us": 1500.0}, path=tmp_path / "motion.local.yaml")
+
+
+def test_a_full_fixed_speed_calibration_built_up_field_by_field_loads(tmp_path):
+    """The end state --record-neutral then two --record-speed calls reach."""
+    path = write(tmp_path, "servo: {model: mg995-360, driver: rpi-pwm}\n", "motion.local.yaml")
+    record_calibration("pan", {"neutral_us": 1500.0}, path=path)
+    record_calibration("pan", {"above_us": 1650.0, "above_deg_s": 58.5}, path=path)
+    record_calibration("pan", {"below_us": 1350.0, "below_deg_s": 81.0}, path=path)
+    config = MotionConfig.from_raw(load_raw(path))
+    assert config.axis_calibrated("pan")
+    cal = config.calibration("pan")
+    assert (cal.neutral_us, cal.above_us, cal.below_us) == (1500.0, 1650.0, 1350.0)

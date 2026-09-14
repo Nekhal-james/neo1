@@ -20,7 +20,7 @@ from neo_webapp.app import create_app
 from neo_webapp.bridge.mock import MockBridge
 from neo_webapp.bridge.types import TranscriptView
 from neo_webapp.media import MediaManager
-from neo_webapp.voice import ChatReply, VoiceLoop
+from neo_webapp.voice import SPEAKER_CHUNK_BYTES, ChatReply, VoiceLoop
 
 from .conftest import TEST_PASSWORD
 from .test_audio_routes import FakeAudio, FakeSpeech
@@ -397,3 +397,88 @@ async def test_clearing_the_speaker_queue_drops_what_was_meant_for_the_last_list
         await bridge.emit_audio_out(b"\x00\x00")
     assert bridge.clear_audio_out() == 3
     assert bridge._audio_out.qsize() == 0
+
+
+async def _drain_slowly(bridge, want: int, out: bytearray) -> None:
+    """A consumer that falls behind on purpose.
+
+    `_audio_out` holds 32 chunks (CLAUDE.md). Draining instantly, the way
+    `_drain` above does, never lets the queue actually fill -- which would let
+    this test pass even against the old `emit_audio_out` path, since nothing
+    would ever hit the full queue it drops from. Sleeping between reads is
+    what forces `push_audio_out` to actually wait for room rather than merely
+    being *able* to.
+    """
+    async for chunk in bridge.audio_out_stream():
+        out.extend(chunk)
+        if len(out) >= want:
+            return
+        await asyncio.sleep(0.002)
+
+
+@pytest.mark.asyncio
+async def test_a_reply_past_the_old_32_chunk_limit_is_not_truncated():
+    """Regression for the 1.49s cutoff (CLAUDE.md).
+
+    `_audio_out` holds 32 chunks of `SPEAKER_CHUNK_BYTES`. `emit_audio_out`
+    drops silently once it is full, so any reply whose synthesized audio
+    exceeded 32 * 2048 bytes -- about 1.49s at 22.05 kHz -- lost everything
+    past that point while the route still reported the full duration and a
+    200. `_push` must use `push_audio_out`, which waits for room instead of
+    dropping, so a slow-draining listener still gets every byte.
+    """
+    old_queue_capacity_bytes = 32 * SPEAKER_CHUNK_BYTES
+    sentence_bytes = old_queue_capacity_bytes + 20 * SPEAKER_CHUNK_BYTES
+    assert sentence_bytes > old_queue_capacity_bytes  # the boundary this guards
+
+    bridge = MockBridge()
+    media = MediaManager(bridge)
+    await media.open("speaker")
+    speech = ScriptedSpeech(sentence_bytes=sentence_bytes)
+    voice = VoiceLoop(
+        SimpleNamespace(bridge=bridge, media=media, speech=speech),
+        push_timeout_s=2.0,
+    )
+
+    received = bytearray()
+    consumer = asyncio.create_task(_drain_slowly(bridge, sentence_bytes, received))
+    try:
+        result = await voice.speak("One long sentence with a lot to say.")
+        await asyncio.wait_for(consumer, timeout=5.0)
+    finally:
+        consumer.cancel()
+        await voice.close()
+
+    assert result.speaker_connected is True
+    assert len(received) == sentence_bytes, (
+        "the reply was truncated at the old 32-chunk (1.49s) queue boundary"
+    )
+
+
+@pytest.mark.asyncio
+async def test_speaking_never_takes_the_dropping_path():
+    """Guards the choice itself, not just its effect: if `_push` (or a future
+    rewrite of it) is changed back to `emit_audio_out`, this fails immediately
+    instead of only failing under the slow-consumer timing the test above
+    needs to expose the drop."""
+    bridge = MockBridge()
+    media = MediaManager(bridge)
+    await media.open("speaker")
+    speech = ScriptedSpeech(sentence_bytes=SPEAKER_CHUNK_BYTES * 5)
+    voice = VoiceLoop(SimpleNamespace(bridge=bridge, media=media, speech=speech))
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError(
+            "speech must be pushed with push_audio_out, not emit_audio_out -- "
+            "emit_audio_out drops on a full queue instead of waiting for room"
+        )
+
+    bridge.emit_audio_out = _forbidden  # type: ignore[method-assign]
+
+    consumer = asyncio.create_task(_drain(bridge))
+    try:
+        result = await voice.speak("hi")
+    finally:
+        consumer.cancel()
+        await voice.close()
+    assert result.speaker_connected is True

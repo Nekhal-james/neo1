@@ -22,8 +22,10 @@ refuses and names every problem at once rather than one per ssh round trip.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -536,6 +538,35 @@ def _config_layers(explicit: str | Path | None) -> list[Path]:
     return [p for p in (DEFAULT_CONFIG, LOCAL_CONFIG) if p.exists()]
 
 
+def load_raw(path: str | Path | None = None) -> dict[str, Any]:
+    """The merged config layers as a plain dict, with no validation at all.
+
+    `MotionConfig.load()` correctly refuses a half-measured calibration (a
+    fixed-speed axis needs `neutral_us`, `above_us`, `above_deg_s`, `below_us`
+    and `below_deg_s` all at once, or it is rejected as incomplete). That is
+    right for anything that drives a servo, and wrong for tooling that is in
+    the middle of *building up* that calibration one measurement at a time --
+    `neo-servo-check --record-speed` needs to read whatever `neutral_us` was
+    already recorded before `above_us`/`below_us` exist yet. Prefer
+    `MotionConfig.load()` wherever a complete, driveable config is actually
+    needed; this is only for reading (or, via `record_calibration`, writing)
+    one field of a calibration still in progress.
+    """
+    raw: dict[str, Any] = {}
+    for layer in _config_layers(path):
+        # Unlike MotionConfig.load(), a missing explicit file is not an error
+        # here: "nothing recorded yet" is exactly the state a calibration in
+        # progress starts from, on the very first --record-neutral.
+        try:
+            text = layer.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        data = yaml.safe_load(text) or {}
+        if isinstance(data, dict):
+            raw = _deep_merge(raw, data)
+    return raw
+
+
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     out = dict(base)
     for key, value in overlay.items():
@@ -544,3 +575,43 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
         else:
             out[key] = value
     return out
+
+
+def record_calibration(
+    axis: str, fields: dict[str, float], *, path: Path = LOCAL_CONFIG
+) -> None:
+    """Merge measured calibration fields into one axis's section of the local
+    config file -- the write side of `neo-servo-check`'s `--record-neutral` and
+    `--record-speed`.
+
+    Reads whatever is already at `path` and merges `fields` into `data[axis]`
+    only: the other axis, the servo/driver section, and anything already
+    measured on this axis are left standing, per the two-layer merge rule this
+    file already loads by (a local file naming one key must not blank the
+    rest). Written atomically (temp file + rename) so a write torn by a lost
+    SSH session or a pulled plug cannot leave the file half-written -- the same
+    failure mode neo_webapp.config's password-hash writer guards against.
+    """
+    if axis not in _AXES:
+        raise ValueError(f"axis must be one of {_AXES}, got {axis!r}")
+
+    data: dict[str, Any] = {}
+    if path.exists():
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            data = loaded
+
+    section = dict(data.get(axis) or {})
+    section.update(fields)
+    data[axis] = section
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise

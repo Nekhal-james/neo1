@@ -16,10 +16,11 @@
   <test_depend>python3-pytest</test_depend>
 
   <!--
-    No per-package setup.py right now: pip installation is consolidated in the
-    repo root's pyproject.toml (see ../../README.md) so there is exactly one
-    way to install everything. build_type/setup.py comes back here once the
-    ROS workspace / colcon build is actually wired up (plan Phase 0/1).
+    Per-package setup.py landed alongside the real node binding in
+    model_conn/nodes/link_node.py (see ../../setup.py). No more COLCON_IGNORE:
+    colcon build (base-paths src) now builds this package and ros2 run
+    model_conn link_node can find it. Pip installation (everything that isn't
+    ros2 run) still goes through the repo root's setup.py, per ../../README.md.
   -->
   <export>
     <build_type>ament_python</build_type>

@@ -14,12 +14,15 @@ comment next to RosBridge's /link/health stub in bridge/ros.py).
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from ..config import Config
-from ..link import LinkTracker
+from ..link import LinkStatus, LinkTracker
 from ..status_store import write_status
 
 log = logging.getLogger("model_conn.nodes.link_node")
+
+_PATH_TO_MSG = {"none": 0, "eth": 1, "wifi": 2}
 
 
 def probe() -> tuple[bool, str]:
@@ -43,17 +46,71 @@ class LinkNode:
     writes it to the status file, so the ROS topic and the local file never
     disagree -- neo_webapp can read either depending on what's available.
 
-    TODO(phase-1): bind the actual rclpy publisher once neo_msgs/LinkHealth
-    exists; this class is not instantiated by any console_script yet.
+    `publish` is optional and ROS-free by construction, not gated on `probe()`:
+    this class -- like link.py -- must stay directly testable with no rclpy
+    installed. `main()` is what supplies a real ROS publish callback; nothing
+    here imports rclpy itself.
     """
 
-    def __init__(self, cfg: Config) -> None:
+    def __init__(
+        self, cfg: Config, publish: Callable[[LinkStatus], None] | None = None
+    ) -> None:
         self._cfg = cfg
-        self._tracker = LinkTracker(
-            cfg.receiver.endpoints, cfg.receiver.probe_timeout_s
-        )
+        self._tracker = LinkTracker(cfg.receiver.endpoints, cfg.receiver.probe_timeout_s)
+        self._publish = publish
 
     def tick(self) -> None:
         status = self._tracker.check_once()
         write_status(status, None, path=self._cfg.status_path)
-        # TODO(phase-1): self._publisher.publish(to_neo_msgs(status))
+        if self._publish is not None:
+            self._publish(status)
+
+
+def to_ros_message(status: LinkStatus):
+    """LinkStatus -> neo_msgs/LinkHealth. Raises ImportError with no neo_msgs."""
+    from neo_msgs.msg import LinkHealth
+
+    msg = LinkHealth()
+    msg.up = status.up
+    msg.active_path = _PATH_TO_MSG.get(status.active_path, LinkHealth.PATH_NONE)
+    msg.rtt_ms = status.rtt_ms if status.rtt_ms is not None else 0.0
+    msg.consecutive_failures = status.consecutive_failures
+    return msg
+
+
+def main(argv: list[str] | None = None) -> int:
+    ok, why = probe()
+    if not ok:
+        print(f"cannot start link node: {why}")
+        print("Use 'neo --connection:status' or 'neo --connection:ping' instead --")
+        print("both drive the identical LinkTracker core with no ROS involved.")
+        return 1
+
+    import rclpy
+    from neo_msgs.msg import LinkHealth
+    from rclpy.node import Node
+
+    rclpy.init(args=argv)
+    ros_node = Node("link")
+    cfg = Config.load()
+    publisher = ros_node.create_publisher(LinkHealth, "/link/health", 10)
+
+    def publish(status: LinkStatus) -> None:
+        msg = to_ros_message(status)
+        msg.header.stamp = ros_node.get_clock().now().to_msg()
+        publisher.publish(msg)
+
+    link_node = LinkNode(cfg, publish=publish)
+    ros_node.create_timer(cfg.receiver.probe_interval_s, link_node.tick)
+    ros_node.get_logger().info(
+        f"link_node: probing every {cfg.receiver.probe_interval_s:.1f}s"
+    )
+    try:
+        rclpy.spin(ros_node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        ros_node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    return 0
