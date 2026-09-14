@@ -8,7 +8,6 @@ and udev rule behave the same -- that is checked on the Pi.
 
 from __future__ import annotations
 
-import logging
 import shutil
 from pathlib import Path
 
@@ -23,6 +22,8 @@ from neo_motion.backend import (
     make_backend,
 )
 from neo_motion.config import MotionConfig, MotionConfigError
+
+from .conftest import captured_log
 
 REPO_CONFIG = Path(__file__).resolve().parents[3] / "config" / "motion.yaml"
 
@@ -201,13 +202,12 @@ def test_a_positional_config_drives_the_pis_hardware_pwm(sysfs, monkeypatch, tmp
     assert (backend.pan_cal.min_us, backend.pan_cal.max_us) == (1200, 1800)
 
 
-def test_without_pwm_hardware_auto_falls_back_and_says_how_to_enable_it(tmp_path, monkeypatch, caplog):
-    # See the identical comment in test_motion_config.py's caplog test.
-    caplog.set_level(logging.WARNING)
+def test_without_pwm_hardware_auto_falls_back_and_says_how_to_enable_it(tmp_path, monkeypatch):
     monkeypatch.setattr(backend_module, "PWM_ROOT", tmp_path / "no-pwm")
     monkeypatch.setenv("NEO_MOTION_CONFIG", str(REPO_CONFIG))
-    assert isinstance(make_backend("auto"), MockServoBackend)
-    assert "pwm-2chan" in caplog.text
+    with captured_log("neo_motion.backend") as records:
+        assert isinstance(make_backend("auto"), MockServoBackend)
+    assert any("pwm-2chan" in r.getMessage() for r in records)
 
 
 def test_naming_the_driver_makes_missing_hardware_an_error(tmp_path, monkeypatch):

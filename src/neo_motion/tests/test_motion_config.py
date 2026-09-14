@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import math
 import sys
 import types
@@ -15,6 +14,8 @@ from neo_motion import config as config_module
 from neo_motion.backend import Pca9685Backend, make_backend
 from neo_motion.config import MG995, MotionConfig, MotionConfigError, load_raw, record_calibration
 from neo_motion.types import HeadLimits
+
+from .conftest import captured_log
 
 REPO_CONFIG = Path(__file__).resolve().parents[3] / "config" / "motion.yaml"
 
@@ -176,22 +177,16 @@ def robot(monkeypatch, tmp_path):
     monkeypatch.setenv("NEO_MOTION_CONFIG", str(write(tmp_path, "servo: {driver: pca9685}\n", "pca9685.yaml")))
 
 
-def test_make_backend_with_no_calibrations_builds_from_the_config(robot, caplog):
+def test_make_backend_with_no_calibrations_builds_from_the_config(robot):
     """It used to raise TypeError: the PCA9685 backend needs calibrations, and the
     servo node called make_backend() with none."""
-    # Forces pytest's log-capture handler onto the root logger for this test.
-    # Under colcon's system pytest + the ament/launch-testing plugins, the
-    # default auto-attached handler is sometimes missing when this fires --
-    # confirmed by the message landing on stderr via logging's lastResort
-    # fallback instead of being captured, which only happens with no handler
-    # attached anywhere in the hierarchy.
-    caplog.set_level(logging.WARNING)
-    backend = make_backend("auto")
+    with captured_log("neo_motion.backend") as records:
+        backend = make_backend("auto")
     assert isinstance(backend, Pca9685Backend)
     assert (backend.pan_cal.min_us, backend.pan_cal.max_us) == (1200, 1800)
     assert (backend.pan_cal.channel, backend.tilt_cal.channel) == (0, 1)
     assert (backend.address, backend.frequency_hz, backend.bus_number) == (0x40, 50, 1)
-    assert "uncalibrated" in caplog.text
+    assert any("uncalibrated" in r.getMessage() for r in records)
 
 
 def test_a_broken_config_stops_the_robot_backend(robot, tmp_path, monkeypatch):

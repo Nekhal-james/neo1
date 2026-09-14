@@ -7,7 +7,6 @@ stop, not a failed assertion.
 
 from __future__ import annotations
 
-import logging
 import math
 import sys
 import types
@@ -22,6 +21,8 @@ from neo_motion.backend import (
     ServoCalibration,
     make_backend,
 )
+
+from .conftest import captured_log
 
 
 class FakeBus:
@@ -171,12 +172,11 @@ def smbus2_installed(monkeypatch):
     monkeypatch.setitem(sys.modules, "smbus2", types.ModuleType("smbus2"))
 
 
-def test_auto_without_smbus2_falls_back_and_says_how_to_install(monkeypatch, caplog):
-    # See the identical comment in test_motion_config.py's caplog test.
-    caplog.set_level(logging.WARNING)
+def test_auto_without_smbus2_falls_back_and_says_how_to_install(monkeypatch):
     monkeypatch.setitem(sys.modules, "smbus2", None)  # import raises ImportError
-    assert isinstance(make_backend("auto", **_cals()), MockServoBackend)
-    assert "pip install -e '.[servo]'" in caplog.text
+    with captured_log("neo_motion.backend") as records:
+        assert isinstance(make_backend("auto", **_cals()), MockServoBackend)
+    assert any("pip install -e '.[servo]'" in r.getMessage() for r in records)
 
 
 def test_auto_without_an_i2c_bus_falls_back_to_the_mock(monkeypatch, smbus2_installed):
