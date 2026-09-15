@@ -57,6 +57,44 @@ def probe() -> tuple[bool, str]:
     return True, "ok"
 
 
+GESTURE_SHAPES: dict[str, tuple[float, float, float, float]] = {
+    # name: (duration_s, pan_amplitude_deg, tilt_amplitude_deg, cycles)
+    "nod": (0.9, 0.0, 7.0, 2.0),
+    "shake": (0.9, 9.0, 0.0, 2.0),
+    "tilt": (1.2, 0.0, 5.0, 0.5),
+    "scan": (2.4, 22.0, 0.0, 1.0),
+}
+"""Mirrors `neo_emotion.motion.GESTURE_SHAPES`, and deliberately does not
+import it -- exactly as `_idle_offset_rad` mirrors `IdleMotion.offset`.
+
+`neo_motion` has no dependency on `neo_emotion` on purpose: emotion publishes
+parameters and gesture *names*, and must never acquire a path to the servos.
+Importing its motion module to avoid duplicating four tuples would be the first
+step of growing one. Kept in sync by eye -- the same trade-off
+`GestureRecognizer.explain` makes against `_classify` in neo_perception.
+"""
+
+
+def _gesture_offset_rad(kind: str, elapsed: float) -> tuple[float, float]:
+    """The overlay for a running gesture; (0, 0) once it has finished.
+
+    Tapered at both ends by a half-sine envelope so the head eases in and out.
+    Starting and stopping a 7-degree nod with a step is a servo noise, not a
+    gesture -- and on continuous-rotation servos it is also a step the dead
+    reckoning has to account for.
+    """
+    shape = GESTURE_SHAPES.get(kind)
+    if shape is None:
+        return (0.0, 0.0)
+    duration, pan_amp, tilt_amp, cycles = shape
+    t = elapsed / duration
+    if t < 0.0 or t >= 1.0:
+        return (0.0, 0.0)
+    envelope = math.sin(math.pi * t)
+    wave = math.sin(2.0 * math.pi * cycles * t)
+    return (math.radians(pan_amp * wave * envelope), math.radians(tilt_amp * wave * envelope))
+
+
 def _idle_offset_rad(
     idle_amplitude_deg: float,
     idle_freq_hz: float,
@@ -102,7 +140,9 @@ class HeadBehaviorNode(Node):
                /perception/attention   neo_msgs/AttentionTarget -> GAZE (30)
                /emotion/state          neo_msgs/EmotionState    -> blend params
                /head/state             sensor_msgs/JointState   -> sync_to()
+               /emotion/gesture        std_msgs/String          -> GESTURE (50)
     publish    /head/command           neo_msgs/HeadCommand     @ 50 Hz
+    service    /head/center            std_srvs/Trigger
 
     Each input becomes a named source on the arbiter, submitted with the stamp
     it arrived with. `resolve()` runs on the timer and its winner is published;
@@ -145,6 +185,8 @@ class HeadBehaviorNode(Node):
         from neo_msgs.msg import AttentionTarget, EmotionState, HeadCommand as HeadCommandMsg
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import Joy, JointState
+        from std_msgs.msg import String
+        from std_srvs.srv import Trigger
 
         super().__init__("head_behavior")
 
@@ -165,6 +207,7 @@ class HeadBehaviorNode(Node):
         self._last_joy_time: float | None = None
         self._attention: AttentionTarget | None = None
         self._last_source = "idle"
+        self._gesture: tuple[str, float] | None = None
 
         qos = QoSProfile(
             depth=1,
@@ -176,9 +219,11 @@ class HeadBehaviorNode(Node):
             AttentionTarget, "/perception/attention", self._on_attention, qos
         )
         self.create_subscription(EmotionState, "/emotion/state", self._on_emotion, 10)
+        self.create_subscription(String, "/emotion/gesture", self._on_gesture, 10)
         self.create_subscription(JointState, "/head/state", self._on_head_state, qos)
 
         self._pub = self.create_publisher(HeadCommandMsg, "/head/command", qos)
+        self.create_service(Trigger, "/head/center", self._on_center)
         self._timer = self.create_timer(1.0 / RATE_HZ, self._on_timer)
         self.get_logger().info("head_behavior: arbitrating manual/gesture/gaze/idle")
 
@@ -226,6 +271,34 @@ class HeadBehaviorNode(Node):
         self._tilt_bias_deg = msg.tilt_bias_deg
         self._micro_motion = msg.micro_motion
 
+    def _on_gesture(self, msg) -> None:
+        kind = (msg.data or "").strip().lower()
+        if kind not in GESTURE_SHAPES:
+            self.get_logger().warning(f"ignoring unknown gesture {kind!r}")
+            return
+        # Replace whatever is running rather than queueing: a queue lets a burst
+        # of dialogue events buy several seconds of head movement that outlives
+        # the moment that caused it (the same rule EmotionMotion.trigger keeps).
+        self._gesture = (kind, self._now())
+
+    def _on_center(self, request, response):
+        """Send the head back to centre from wherever it was last aimed.
+
+        Every accumulator is reset with it, the same as the panel's simulated
+        robot does: a stale joystick target or a resting point left over from
+        the last gaze lock would drive the head straight back out of centre on
+        the next tick, which looks exactly like the button not working. The
+        arbiter's crossfade then carries the head there rather than snapping.
+        """
+        self._manual_target = None
+        self._gesture = None
+        self._idle_base = (0.0, 0.0)
+        self.arbiter.withdraw("manual")
+        self.arbiter.withdraw("gesture")
+        response.success = True
+        response.message = "centering"
+        return response
+
     def _on_head_state(self, msg) -> None:
         if len(msg.position) >= 2:
             self.arbiter.sync_to(msg.position[0], msg.position[1])
@@ -254,6 +327,8 @@ class HeadBehaviorNode(Node):
             # should hold rather than swing to the middle.
             self.arbiter.withdraw("gaze")
 
+        self._submit_gesture(now)
+
         dpan, dtilt = _idle_offset_rad(
             self._idle_amplitude_deg,
             self._idle_freq_hz,
@@ -273,13 +348,45 @@ class HeadBehaviorNode(Node):
         )
 
         resolved = self.arbiter.resolve(now)
-        if resolved.source != "idle":
+        if resolved.source not in ("idle", "gesture"):
             # Relative to where the head is resting, not to centre -- an
             # absolute idle target would quietly undo wherever the operator or
             # gaze last aimed it.
+            #
+            # "gesture" is excluded for a different reason: the gesture overlay
+            # is *computed from* `_idle_base`, so adopting its output as the new
+            # base feeds it back into itself and the head walks away by one
+            # overlay per tick instead of nodding and returning.
             self._idle_base = (resolved.command.pan_rad, resolved.command.tilt_rad)
         self._last_source = resolved.source
         self._publish(resolved.command, now)
+
+    def _submit_gesture(self, now: float) -> None:
+        """A nod or a shake, as an overlay on where the head already is.
+
+        Relative to `_idle_base` -- the resting point gaze or the operator last
+        established -- so a nod is a nod *at the person*, not a nod that first
+        swings the head back to centre. Above GAZE so it is visible while
+        tracking someone, and below MANUAL so it never fights an operator.
+        """
+        if self._gesture is None:
+            self.arbiter.withdraw("gesture")
+            return
+        kind, started = self._gesture
+        dpan, dtilt = _gesture_offset_rad(kind, now - started)
+        if dpan == 0.0 and dtilt == 0.0:
+            self._gesture = None
+            self.arbiter.withdraw("gesture")
+            return
+        self.arbiter.submit(
+            "gesture",
+            HeadCommand(
+                pan_rad=self._idle_base[0] + dpan,
+                tilt_rad=self._idle_base[1] + dtilt,
+                priority=Priority.GESTURE,
+                stamp=now,
+            ),
+        )
 
     def _publish(self, command: HeadCommand, now: float) -> None:
         from neo_msgs.msg import HeadCommand as HeadCommandMsg

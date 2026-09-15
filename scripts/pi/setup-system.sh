@@ -7,7 +7,8 @@
 #
 #   --eth-address CIDR     static address for eth0 (default 192.168.50.2/24)
 #   --with-panel-service   install and enable neo-panel.service
-#   --servo-pwm            servos wired straight to the Pi: enable its hardware
+#   --with-robot-service   install and enable neo-robot.service (the ROS graph)
+#   --servo-pwm           servos wired straight to the Pi: enable its hardware
 #                          PWM on GPIO18/19 and let the user drive it (turns off
 #                          the 3.5 mm audio jack, which shares that hardware)
 #
@@ -23,6 +24,7 @@ set -euo pipefail
 ROS_DISTRO=jazzy
 ETH_ADDRESS="192.168.50.2/24"
 WITH_PANEL_SERVICE=0
+WITH_ROBOT_SERVICE=0
 SERVO_PWM=0
 REBOOT_NEEDED=0
 
@@ -30,8 +32,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --eth-address) ETH_ADDRESS="$2"; shift 2 ;;
     --with-panel-service) WITH_PANEL_SERVICE=1; shift ;;
+    --with-robot-service) WITH_ROBOT_SERVICE=1; shift ;;
     --servo-pwm) SERVO_PWM=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -288,6 +291,21 @@ if [ "$WITH_PANEL_SERVICE" = 1 ]; then
     systemctl enable neo-panel.service
   fi
   echo "enabled, not started: it needs setup-user.sh and 'neo --webapp setup' first"
+fi
+
+# --- optional: the robot itself as a service -----------------------------------
+
+if [ "$WITH_ROBOT_SERVICE" = 1 ]; then
+  step "robot service (the ROS graph under the 'hardware' profile)"
+  sed -e "s#@USER@#${TARGET_USER}#" \
+      -e "s#@REPO@#${REPO_DIR}#" \
+      -e "s#@VENV@#${TARGET_HOME}/neo-venv#" \
+      "$FILES/neo-robot.service" > /etc/systemd/system/neo-robot.service
+  if have_systemd; then
+    systemctl daemon-reload
+    systemctl enable neo-robot.service
+  fi
+  echo "enabled, not started: it needs setup-user.sh first; then 'sudo systemctl start neo-robot'"
 fi
 
 # --- done ----------------------------------------------------------------------

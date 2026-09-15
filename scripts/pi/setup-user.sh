@@ -148,14 +148,38 @@ YAML
 else
   echo "  config/model_conn.local.yaml exists; left alone"
 fi
+if [ ! -f "$REPO_DIR/config/audio.local.yaml" ]; then
+  # The wake word is this robot's own Teachable Machine export, so it cannot be
+  # a committed default; point at whichever export has been copied in.
+  wake_model="$(ls "$REPO_DIR"/models/wakeword/*.zip 2>/dev/null | head -n 1 || true)"
+  if [ -n "$wake_model" ]; then
+    wake_rel="models/wakeword/$(basename "$wake_model")"
+    cat > "$REPO_DIR/config/audio.local.yaml" <<YAML
+# Written by scripts/pi/setup-user.sh. The wake word is a Teachable Machine
+# audio export run in numpy (neo_audio/wakeword.py). Choose the threshold by
+# watching the live score while saying the word:  neo-audio-check --listen
+wakeword:
+  model_path: $wake_rel
+YAML
+    echo "  wrote config/audio.local.yaml (wake word: $wake_rel)"
+  else
+    echo "  config/audio.local.yaml not written: no models/wakeword/*.zip yet"
+  fi
+else
+  echo "  config/audio.local.yaml exists; left alone"
+fi
 
 missing_models=0
 for path in models/vosk-model-small-en-in-0.4 models/en_US-lessac-medium.onnx yolov8n-pose.pt; do
   [ -e "$REPO_DIR/$path" ] || { echo "  missing: $path (run sync-to-pi.sh from the laptop)"; missing_models=1; }
 done
-[ "$missing_models" = 0 ] && echo "  speech and pose models present"
+if ! ls "$REPO_DIR"/models/wakeword/*.zip >/dev/null 2>&1; then
+  echo "  missing: models/wakeword/<export>.zip (the Teachable Machine wake word; copy it in and re-run)"
+  missing_models=1
+fi
+[ "$missing_models" = 0 ] && echo "  speech, wake word and pose models present"
 
-step "colcon build: neo_msgs + neo_bringup (ROS shell, no venv)"
+step "colcon build: every ROS package (ROS shell, no venv)"
 ros_shell colcon build --base-paths src --symlink-install
 if [ ! -d "$REPO_DIR/install/neo_msgs" ]; then
   echo "colcon built nothing -- see CLAUDE.md on --base-paths src" >&2
@@ -166,7 +190,7 @@ if [ "$RUN_TESTS" = 1 ]; then
   failures=0
 
   step "pytest, per package (venv only, ROS NOT sourced -- see CLAUDE.md)"
-  for pkg in neo_webapp neo_perception neo_motion neo_emotion intelligence model-conn neo_msgs neo_bringup; do
+  for pkg in neo_webapp neo_perception neo_motion neo_emotion neo_audio neo_sources intelligence model-conn neo_msgs neo_bringup; do
     log="/tmp/neo-pytest-$pkg.log"
     printf '  %-16s ' "$pkg"
     if (cd "$REPO_DIR/src/$pkg" && env -u AMENT_PREFIX_PATH -u PYTHONPATH -u ROS_DISTRO \
@@ -202,6 +226,13 @@ case ",$EXTRAS," in
     ;;
 esac
 
+case ",$EXTRAS," in
+  *,voice,*)
+    step "microphone, speaker, wake word (read-only: nothing is recorded or played)"
+    "$VENV/bin/neo-audio-check" || true
+    ;;
+esac
+
 step "user setup complete"
 cat <<NEXT
 Still yours to do (each needs a password or a secret, so no script does it):
@@ -210,7 +241,10 @@ Still yours to do (each needs a password or a secret, so no script does it):
   2. Panel certificate:        see docs/pi-setup.md, section 4
   3. Link mTLS:                see docs/security.md
 
-Run the panel:                 $VENV/bin/neo --webapp up
+Start the robot and panel:     bash $REPO_DIR/scripts/pi/neo-up.sh --panel
+Check what would start:        bash $REPO_DIR/scripts/pi/neo-up.sh --check
+Start both at every boot:      sudo bash $REPO_DIR/scripts/pi/setup-system.sh --with-robot-service --with-panel-service
+Tune the wake word:            $VENV/bin/neo-audio-check --listen
 Check the servo board:         $VENV/bin/neo-servo-check   (add --center to move them)
 Use ROS in a shell:            source /opt/ros/$ROS_DISTRO/setup.bash && source $REPO_DIR/install/setup.bash
 NEXT

@@ -146,6 +146,11 @@ async def ws_mic(websocket: WebSocket) -> None:
         while True:
             chunk = await websocket.receive_bytes()
             await bridge.publish_mic_chunk(chunk)
+            if getattr(bridge, "owns_recognition", False):
+                # On the robot, this audio goes into the graph, where the wake
+                # word and asr_router already listen to it. A second recogniser
+                # here would transcribe everything twice, on the same Pi.
+                continue
             # Half-duplex (plan 5.6): while Neo's own voice is playing, the room
             # mic is hearing it. The meter above still gets the audio -- the mic
             # is fine -- but the recognizer must not, or Neo transcribes its own

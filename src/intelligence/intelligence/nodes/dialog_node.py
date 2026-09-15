@@ -1,20 +1,49 @@
-"""ROS 2 node wrapping chat/asr/tts -- same thin-wrapper discipline as
-model_conn/nodes/link_node.py and neo_perception/nodes/perception_node.py.
+"""The conversation state machine: wake -> listen -> answer -> speak.
 
-Activates once Phase 1 lands `neo_msgs`. Until then, `neo --prompt` exercises
-chat.ask() directly, and status_store.py's local JSON file is what
-neo_webapp reads (see neo_webapp/dialog_status.py).
+Owns /dialog/state, which is the one place anything else asks what Neo is
+doing. The wake word mutes itself on it, the emotion layer reads it, and the
+admin panel shows it.
+
+One turn:
+
+    /wake/event        -> LISTENING   (asr_router opens its window)
+    /dialog/transcript -> THINKING    (final, non-empty)
+    /dialog/reply      -> SPEAKING    (tts renders it; /dialog/speaking ends it)
+
+Four deliberate shapes, each of which was tempting to do the simpler way:
+
+* **Answering runs on a worker thread.** `chat.ask()` can take a minute -- the
+  model host is a laptop that may be cold or absent, and degraded is the normal
+  operating state, not an error path (CLAUDE.md). Answering inside the
+  subscription callback stalls this node's executor, and what it stalls is
+  /dialog/state -- so everything downstream would still believe Neo was
+  THINKING long after it had given up.
+* **Speech is another node's job.** This publishes `/dialog/reply`; `neo_audio`'s
+  tts node synthesises it. Piper blocks for seconds on a paragraph, and keeping
+  that in a different process is what keeps this state machine answering.
+* **One turn at a time, no queue** (CLAUDE.md, plan 5.6). A transcript that
+  arrives mid-turn is dropped rather than stacked up and answered once the
+  moment it belonged to has passed.
+* **Every state has an exit that does not depend on another node.** The wake
+  word is gated off whenever this state is not IDLE, so a turn stuck in
+  LISTENING, THINKING or SPEAKING -- because asr_router, tts or the speaker died
+  mid-turn -- would leave the robot deaf until someone restarted it. A watchdog
+  returns to IDLE after a bound on each (plan 8, step 2), and the state is
+  republished twice a second, so a node that restarts or misses a transition
+  re-learns it rather than waiting for the next one.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import time
 
 from model_conn.config import Config as ModelConnConfig
 
 from ..chat import ask
 from ..config import Config
-from ..tts import synthesize_pcm
+from ..intents import describe_object, no_object_seen, wants_object_identification
 
 log = logging.getLogger("intelligence.nodes.dialog_node")
 
@@ -23,16 +52,41 @@ try:
 except ImportError:  # pragma: no cover - exercised only where ROS is installed
     Node = object
 
-# neo_msgs/DialogState state constants, mirrored as plain ints so this module
-# needs no neo_msgs import at parse time (see probe()).
+# neo_msgs/DialogState constants, mirrored as plain ints so this module parses
+# without neo_msgs installed (see probe()).
 _IDLE, _LISTENING, _THINKING, _SPEAKING = 0, 1, 2, 3
+_NAMES = {_IDLE: "IDLE", _LISTENING: "LISTENING", _THINKING: "THINKING", _SPEAKING: "SPEAKING"}
 
-SPEAKER_CHUNK_BYTES = 2048
-"""Same chunk size as neo_webapp/voice.py's speaker channel (plan 5.6) -- not
-load-bearing here since /audio/out is a topic, not a backpressured queue, but
-consistent chunking keeps the two paths comparable when debugging."""
+# neo_msgs/Reply source constants, same reasoning.
+_SOURCE_KB, _SOURCE_LLM, _SOURCE_KB_POLISHED, _SOURCE_FALLBACK = 0, 1, 2, 3
 
-AUDIO_OUT_SAMPLE_RATE = 22050
+_REPLY_SOURCE = {
+    # chat.ChatResult.source is "ollama" | "kb" | "degraded".
+    "ollama": _SOURCE_LLM,
+    "kb": _SOURCE_KB,
+    "degraded": _SOURCE_FALLBACK,
+}
+
+IDENTIFY_WAIT_S = 6.0
+"""Ceiling on the /perception/identify round trip.
+
+Deliberately longer than perception's own timeout, so its considered answer
+wins the race; this only catches a perception node that is not running at all.
+"""
+
+LISTENING_TIMEOUT_S = 25.0
+"""asr_router closes its own window -- within 15 s of speech, or by its own
+watchdog when audio stops -- so this only catches an asr_router that is not
+running at all."""
+
+REPLY_START_TIMEOUT_S = 10.0
+"""From publishing a reply to tts reporting that speech has started. The first
+sentence takes well under a second once Piper is loaded; ten covers a cold load."""
+
+SPEAKING_TIMEOUT_S = 120.0
+"""The longest a reply may be heard for. A 600-character answer is under a minute."""
+
+HEARTBEAT_S = 0.5
 
 
 def probe() -> tuple[bool, str]:
@@ -48,19 +102,15 @@ def probe() -> tuple[bool, str]:
 
 
 class DialogNode(Node):
-    """Wiring plan (contracts in docs/IMPLEMENTATION_PLAN.md section 1.2 / 5).
+    """Wiring plan (contracts in docs/IMPLEMENTATION_PLAN.md sections 1.2, 5, 8).
 
-    subscribe  /dialog/transcript   neo_msgs/Transcript   (from asr_router)
-    publish    /dialog/state        neo_msgs/DialogState  (IDLE/THINKING/SPEAKING/...)
-               /audio/out           neo_msgs/AudioChunk   (from tts.synthesize_pcm)
-
-    Each *final* transcript calls chat.ask() and publishes the reply's audio as
-    a run of AudioChunk messages, same core functions `neo --prompt` and a
-    future ASR pipeline both call -- this class only adds the ROS plumbing.
-
-    One turn at a time, no queue (CLAUDE.md, plan 5.6): a transcript that
-    arrives while a reply is already in flight is dropped rather than queued,
-    the same rule the panel's voice loop enforces at its own edge.
+    subscribe  /wake/event         neo_msgs/WakeEvent
+               /dialog/transcript  neo_msgs/Transcript
+               /dialog/speaking    std_msgs/Bool         (from tts)
+               /link/health        neo_msgs/LinkHealth   -> DialogState.degraded
+    publish    /dialog/state       neo_msgs/DialogState  (on change, and every 0.5 s)
+               /dialog/reply       neo_msgs/Reply
+    client     /perception/identify  std_srvs/Trigger
     """
 
     def __init__(self, cfg: Config, mc_cfg: ModelConnConfig) -> None:
@@ -68,79 +118,204 @@ class DialogNode(Node):
         if not ok:
             raise RuntimeError(f"ROS dialog node unavailable: {why}")
 
-        from neo_msgs.msg import AudioChunk, DialogState, Transcript
+        from neo_msgs.msg import DialogState, LinkHealth, Reply, Transcript, WakeEvent
+        from rclpy.callback_groups import ReentrantCallbackGroup
+        from std_msgs.msg import Bool
+        from std_srvs.srv import Trigger
 
         super().__init__("dialog")
 
         self._cfg = cfg
         self._mc_cfg = mc_cfg
         self._busy = False
-        self._seq = 0
+        self._lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._degraded = False
+        self._state = _IDLE
+        self._state_since = time.monotonic()
+        self._reply_published_at: float | None = None
 
-        self.create_subscription(Transcript, "/dialog/transcript", self._on_transcript, 10)
+        group = ReentrantCallbackGroup()
+        self.create_subscription(WakeEvent, "/wake/event", self._on_wake, 10)
+        self.create_subscription(
+            Transcript, "/dialog/transcript", self._on_transcript, 10, callback_group=group
+        )
+        self.create_subscription(Bool, "/dialog/speaking", self._on_speaking, 10)
+        self.create_subscription(LinkHealth, "/link/health", self._on_link, 10)
+
         self._state_pub = self.create_publisher(DialogState, "/dialog/state", 10)
-        self._audio_pub = self.create_publisher(AudioChunk, "/audio/out", 10)
+        self._reply_pub = self.create_publisher(Reply, "/dialog/reply", 10)
+        self._identify = self.create_client(
+            Trigger, "/perception/identify", callback_group=group
+        )
+        self.create_timer(HEARTBEAT_S, self._on_watchdog)
 
         self._publish_state(_IDLE)
-        self.get_logger().info("dialog_node: waiting on /dialog/transcript")
+        self.get_logger().info("dialog: idle, waiting on /wake/event")
 
-    # -- core, reused by neo --prompt and any future caller -----------------
+    # -- core, the same call `neo --prompt` makes ---------------------------
 
-    def on_transcript(self, text: str, mc_cfg: ModelConnConfig | None = None) -> str:
-        result = ask(text, cfg=self._cfg, mc_cfg=mc_cfg or self._mc_cfg)
-        return result.reply
+    def answer(self, text: str) -> tuple[str, int, float]:
+        """A question in, an answer plus its provenance and latency out.
 
-    # -- ROS callbacks -----------------------------------------------------
+        The identification branch is checked first and never reaches the model
+        host: "what is this?" is a question about the room, and the laptop
+        cannot see the room.
+        """
+        started = time.monotonic()
+        if wants_object_identification(text):
+            label, ok = self._ask_perception()
+            reply = describe_object(label) if ok else no_object_seen()
+            return reply, _SOURCE_KB, (time.monotonic() - started) * 1000.0
+
+        result = ask(text, cfg=self._cfg, mc_cfg=self._mc_cfg)
+        source = _REPLY_SOURCE.get(result.source, _SOURCE_FALLBACK)
+        return result.reply, source, result.latency_ms or (time.monotonic() - started) * 1000.0
+
+    def _ask_perception(self) -> tuple[str, bool]:
+        from std_srvs.srv import Trigger
+
+        if not self._identify.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warning("identify: the perception node is not running")
+            return "", False
+        future = self._identify.call_async(Trigger.Request())
+        # Blocking here is safe: this runs on the answering worker thread, and
+        # the client is in a reentrant group, so the executor keeps turning and
+        # can deliver the response that ends this wait.
+        deadline = time.monotonic() + IDENTIFY_WAIT_S
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not future.done() or future.result() is None:
+            self.get_logger().warning("identify: no answer from perception")
+            return "", False
+        response = future.result()
+        return (response.message or ""), bool(response.success)
+
+    # -- ROS callbacks -------------------------------------------------------
+
+    def _on_wake(self, msg) -> None:
+        with self._lock:
+            if self._busy:
+                return
+        self._publish_state(_LISTENING)
+        self.get_logger().info(
+            f"wake: {msg.score:.3f} >= {msg.threshold_applied:.2f}"
+            f"{' (person in frame)' if msg.person_present else ''}"
+        )
+
+    def _on_link(self, msg) -> None:
+        # No model host is the *normal* state on this robot, not a fault
+        # (CLAUDE.md); it changes what the panel shows, nothing else.
+        self._degraded = not bool(getattr(msg, "up", False))
+
+    def _on_speaking(self, msg) -> None:
+        if msg.data:
+            self._reply_published_at = None
+            self._publish_state(_SPEAKING)
+        elif self._state == _SPEAKING:
+            self._publish_state(_IDLE)
 
     def _on_transcript(self, msg) -> None:
         if not msg.is_final:
             return
-        if self._busy:
-            # One turn at a time, no queue -- see class docstring.
-            self.get_logger().warning("dropping transcript: a reply is already in flight")
+        text = (msg.text or "").strip()
+        if not text:
+            # The window closed having heard nothing: a false wake. Return to
+            # idle rather than leaving LISTENING latched, which would keep the
+            # wake word gated off.
+            if self._state == _LISTENING:
+                self._publish_state(_IDLE)
             return
-        self._busy = True
+
+        with self._lock:
+            if self._busy:
+                self.get_logger().warning("dropping transcript: a reply is already in flight")
+                return
+            self._busy = True
+
+        threading.Thread(
+            target=self._answer_turn, args=(text,), name="dialog-turn", daemon=True
+        ).start()
+
+    def _answer_turn(self, text: str) -> None:
         try:
             self._publish_state(_THINKING)
-            reply = self.on_transcript(msg.text)
-            self._speak(reply)
-        finally:
+            reply, source, latency_ms = self.answer(text)
+            if reply:
+                self._publish_reply(reply, source, latency_ms)
+            else:
+                self._publish_state(_IDLE)
+        except Exception:  # noqa: BLE001 - one bad turn must not end the conversation
+            self.get_logger().error("answering failed", exc_info=True)
             self._publish_state(_IDLE)
-            self._busy = False
+        finally:
+            with self._lock:
+                self._busy = False
 
-    def _speak(self, text: str) -> None:
-        self._publish_state(_SPEAKING)
-        try:
-            pcm = synthesize_pcm(text, self._cfg, target_rate=AUDIO_OUT_SAMPLE_RATE)
-        except Exception:  # noqa: BLE001 - a TTS failure must not crash the node
-            self.get_logger().error("speech synthesis failed", exc_info=True)
+    def _on_watchdog(self) -> None:
+        """Bound every state, then republish the current one."""
+        now = time.monotonic()
+        state, since, reply_at = self._state, self._state_since, self._reply_published_at
+        reason = None
+        if state == _LISTENING and now - since > LISTENING_TIMEOUT_S:
+            reason = "no transcript arrived -- is asr_router running?"
+        elif state == _THINKING and reply_at is not None and now - reply_at > REPLY_START_TIMEOUT_S:
+            reason = "the reply was never spoken -- is tts running?"
+        elif state == _SPEAKING and now - since > SPEAKING_TIMEOUT_S:
+            reason = "speech never reported finishing"
+        # THINKING with no reply yet is the model host taking its time, which
+        # chat.timeout_s already bounds; cutting it short here would throw away
+        # an answer that is still coming.
+
+        if reason is not None:
+            self._reply_published_at = None
+            self.get_logger().warning(f"dialog: back to IDLE from {_NAMES.get(state, state)}: {reason}")
+            self._publish_state(_IDLE)
             return
-        for offset in range(0, len(pcm.data), SPEAKER_CHUNK_BYTES):
-            self._publish_audio(pcm.data[offset : offset + SPEAKER_CHUNK_BYTES], pcm.sample_rate)
+        self._republish()
 
-    def _publish_state(self, state: int, **flags) -> None:
+    # -- publishing ----------------------------------------------------------
+
+    def _publish_reply(self, text: str, source: int, latency_ms: float) -> None:
+        from neo_msgs.msg import Reply
+
+        msg = Reply()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.text = text
+        msg.source = source
+        msg.latency_ms = float(latency_ms)
+        self._reply_published_at = time.monotonic()
+        self._reply_pub.publish(msg)
+        self.get_logger().info(f"reply ({latency_ms:.0f} ms): {text[:80]}")
+        # SPEAKING is *not* published here. It is published when tts says it
+        # has started: the gap between publishing a reply and audio leaving the
+        # speaker is exactly where a half-duplex gate built on this message
+        # would let the microphone hear Neo's first sentence.
+
+    def _publish_state(self, state: int) -> None:
+        # Under one lock with the publish itself, so a transition from the
+        # answering thread and a heartbeat from the executor can never go out
+        # in the wrong order and leave the last word with the stale state.
+        with self._state_lock:
+            if state != self._state:
+                self._state_since = time.monotonic()
+            self._state = state
+            self._emit(state)
+
+    def _republish(self) -> None:
+        with self._state_lock:
+            self._emit(self._state)
+
+    def _emit(self, state: int) -> None:
         from neo_msgs.msg import DialogState
 
         msg = DialogState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.state = state
-        msg.degraded = flags.get("degraded", False)
-        msg.estop = flags.get("estop", False)
-        msg.follow_up_open = flags.get("follow_up_open", False)
+        msg.degraded = self._degraded
+        msg.estop = False
+        msg.follow_up_open = False
         self._state_pub.publish(msg)
-
-    def _publish_audio(self, data: bytes, sample_rate: int) -> None:
-        from neo_msgs.msg import AudioChunk
-
-        msg = AudioChunk()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.seq = self._seq
-        self._seq += 1
-        msg.sample_rate = sample_rate
-        msg.channels = 1
-        msg.encoding = AudioChunk.ENCODING_PCM_S16LE
-        msg.data = list(data)
-        self._audio_pub.publish(msg)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -151,11 +326,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     import rclpy
+    from rclpy.executors import MultiThreadedExecutor
 
     rclpy.init(args=argv)
     node = DialogNode(Config.load(), ModelConnConfig.load())
+    # Multi-threaded because a turn waits on /perception/identify while this
+    # same executor has to keep servicing the response that ends the wait.
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

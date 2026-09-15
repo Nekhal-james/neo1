@@ -64,7 +64,7 @@
     <button data-tab="audio">Audio</button>
     <button data-tab="dialog">Dialog</button>
     <button data-tab="data">Data</button>
-    <button data-tab="emotion" disabled>Emotion<span class="phase">P9</span></button>
+    <button data-tab="emotion">Emotion</button>
     <button data-tab="logs" disabled>Logs<span class="phase">P10</span></button>
   </nav>
 
@@ -199,6 +199,15 @@
           </div>
         </div>
 
+        <div class="card" id="card-robot-camera" style="grid-column: 1 / -1; max-width: 680px" hidden>
+          <h2>Robot camera</h2>
+          <img id="robot-camera" alt="The robot's camera"
+               style="width:100%;display:block;border-radius:6px;background:#0b0e12;min-height:120px">
+          <div class="hint" id="robot-camera-hint">
+            Refreshed about twice a second while this tab is open, and not at all otherwise.
+          </div>
+        </div>
+
         <div class="card">
           <h2>Engagement</h2>
           <div class="row"><span class="k">State</span><span class="v" id="v-eng-state">—</span></div>
@@ -225,6 +234,33 @@
     <!-- Audio -->
     <section class="tab" id="tab-audio">
       <div class="grid">
+        <div class="card" id="card-robot-voice" style="grid-column: 1 / -1; max-width: 680px" hidden>
+          <h2>The robot</h2>
+          <div class="row"><span class="k">Wake word</span><span class="v" id="v-wake-state">—</span></div>
+          <div style="height:8px;background:rgba(125,138,153,.25);border-radius:4px;overflow:hidden;margin:4px 0 10px">
+            <div id="v-wake-meter" style="height:100%;width:0;background:var(--good);transition:width .2s"></div>
+          </div>
+          <div class="row"><span class="k">Neo is</span><span class="v" id="v-robot-phase">—</span></div>
+          <div class="row"><span class="k">Heard</span><span class="v" id="v-robot-heard">—</span></div>
+          <div class="row"><span class="k">Replied</span><span class="v" id="v-robot-reply">—</span></div>
+          <div class="toggles">
+            <button id="btn-robot-wake" class="accent">Listen now</button>
+            <button id="btn-robot-cancel">Stop talking</button>
+          </div>
+          <div class="ask-row" style="margin-top:10px">
+            <input id="robot-say-input" type="text" autocomplete="off"
+                   placeholder="Welcome! Ask me where any room is.">
+            <button id="btn-robot-say">Say on robot</button>
+          </div>
+          <div class="answer" id="robot-voice-answer" hidden></div>
+          <div class="hint">
+            Neo listens for its name on its own microphone and answers through its own
+            speaker. <b>Listen now</b> opens the same listening window without the name,
+            like a push-to-talk. The bar is the wake word's live score; watching it while
+            saying "Neo" is how the threshold in <code>config/audio.local.yaml</code> is chosen.
+          </div>
+        </div>
+
         <div class="card" style="grid-column: 1 / -1; max-width: 680px">
           <h2>Conversation</h2>
           <div class="toggles" style="margin-top:0">
@@ -353,8 +389,20 @@
           <div class="row"><span class="k">ASR</span><span class="v" id="v-dlg-asr">—</span></div>
           <div class="row"><span class="k">TTS</span><span class="v" id="v-dlg-tts">—</span></div>
         </div>
-        <div class="card">
-          <div class="stub">Live transcript feed, latency breakdown — <code>Phase 6 / 8</code></div>
+        <div class="card" id="card-robot-dialog" hidden>
+          <h2>Ask the robot</h2>
+          <div class="ask-row">
+            <input id="robot-ask-input" type="text" autocomplete="off" placeholder="where is the library">
+            <button id="btn-robot-ask">Ask aloud</button>
+          </div>
+          <div class="answer" id="robot-ask-answer" hidden></div>
+          <div class="row"><span class="k">Last reply</span><span class="v" id="v-robot-reply2">—</span></div>
+          <div class="row"><span class="k">Answered from</span><span class="v" id="v-robot-source">—</span></div>
+          <div class="row"><span class="k">Turns</span><span class="v" id="v-robot-turns">—</span></div>
+          <div class="hint">
+            Enters the robot's own conversation exactly where a spoken question does
+            after the wake word, and is answered through the robot's speaker.
+          </div>
         </div>
       </div>
     </section>
@@ -515,7 +563,36 @@
         </div>
       </div>
     </section>
-    <section class="tab" id="tab-emotion"><div class="stub">Emotion state, overrides, gesture triggers — <code>Phase 9</code></div></section>
+    <!-- Emotion -->
+    <section class="tab" id="tab-emotion">
+      <div class="grid">
+        <div class="card">
+          <h2>Mood</h2>
+          <div class="row"><span class="k">Feeling</span><span class="v" id="v-emo-label">—</span></div>
+          <div class="row"><span class="k">Intensity</span><span class="v" id="v-emo-intensity">—</span></div>
+          <div class="row"><span class="k">Last gesture</span><span class="v" id="v-emo-gesture">—</span></div>
+          <div class="hint">
+            Neo decides its own mood from what it sees and hears. Mood shapes how the
+            head drifts and how eagerly it turns to someone; it never drives the servos
+            by itself.
+          </div>
+        </div>
+        <div class="card">
+          <h2>Gestures</h2>
+          <div class="controls" id="gesture-buttons">
+            <button data-gesture="nod">Nod</button>
+            <button data-gesture="shake">Shake</button>
+            <button data-gesture="tilt">Tilt</button>
+            <button data-gesture="scan">Look around</button>
+          </div>
+          <div class="answer" id="gesture-answer" hidden></div>
+          <div class="hint">
+            Played above following a person and below the joystick, and refused while
+            the e-stop is engaged. Neo also nods on its own when someone walks up.
+          </div>
+        </div>
+      </div>
+    </section>
     <section class="tab" id="tab-logs"><div class="stub">Journal tail, bag recording — <code>Phase 10</code></div></section>
   </main>
 

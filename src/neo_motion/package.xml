@@ -9,6 +9,7 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <!-- Required only by the ROS nodes; the core is pure Python. -->
   <exec_depend>neo_msgs</exec_depend>

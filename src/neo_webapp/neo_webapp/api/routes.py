@@ -13,7 +13,7 @@ import time
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from ..auth import (
     MIN_PASSWORD_CHARS,
@@ -621,6 +621,108 @@ async def voice_ask(request: Request, user: str = Depends(require_session)) -> d
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
     return asdict(turn)
+
+
+# -- the robot's own conversation, camera and gestures -----------------------
+#
+# These drive the robot's ROS graph, not the panel's in-process voice loop.
+# Each route checks the bridge's declared capabilities first, so on the
+# simulated robot the answer is a clear 501 rather than an AttributeError.
+
+
+def _capable(request: Request, capability: str):
+    bridge = request.app.state.bridge
+    if capability not in bridge.snapshot().capabilities:
+        raise HTTPException(
+            501,
+            f"the {bridge.name} bridge cannot do that -- it needs the panel "
+            f"connected to the robot's ROS graph (scripts/pi/neo-panel.sh)",
+        )
+    return bridge
+
+
+async def _text_from(request: Request) -> str:
+    payload = await request.json()
+    text = str(payload.get("text", "")).strip() if isinstance(payload, dict) else ""
+    if not text:
+        raise HTTPException(400, "text must not be empty")
+    if len(text) > MAX_PROMPT_CHARS:
+        raise HTTPException(413, f"text must be under {MAX_PROMPT_CHARS} characters")
+    return text
+
+
+def _confirmed(result) -> dict:
+    if not result.ok:
+        # 409: the request was understood and refused by the robot's current
+        # state -- e-stop engaged, a turn already in flight -- not malformed.
+        raise HTTPException(409, result.message)
+    return result.to_dict()
+
+
+@router.post("/api/robot/wake")
+async def robot_wake(request: Request, user: str = Depends(require_session)) -> dict:
+    """Open the robot's listening window, as if it had heard its name.
+
+    A push-to-talk for a noisy room or a wake word still being tuned. The event
+    it publishes carries a threshold of 0, so a turn started this way can never
+    be mistaken for the detector having accepted something.
+    """
+    return _confirmed(await _capable(request, "robot_voice").robot_wake())
+
+
+@router.post("/api/robot/ask")
+async def robot_ask(request: Request, user: str = Depends(require_session)) -> dict:
+    """A typed question into the robot's conversation, answered through its speaker.
+
+    Enters exactly where a spoken question does after the wake word, so the
+    answer takes the robot's real path: the "what is this" check, the campus
+    directory, the model host or its degraded reply, and Piper.
+    """
+    bridge = _capable(request, "robot_voice")
+    return _confirmed(await bridge.robot_ask(await _text_from(request)))
+
+
+@router.post("/api/robot/say")
+async def robot_say(request: Request, user: str = Depends(require_session)) -> dict:
+    """Speak `text` through the robot's current speaker. No model involved."""
+    bridge = _capable(request, "robot_voice")
+    return _confirmed(await bridge.robot_say(await _text_from(request)))
+
+
+@router.post("/api/robot/cancel")
+async def robot_cancel(request: Request, user: str = Depends(require_session)) -> dict:
+    """Stop the robot mid-sentence."""
+    return _confirmed(await _capable(request, "robot_voice").robot_cancel())
+
+
+@router.post("/api/emotion/gesture")
+async def emotion_gesture(request: Request, user: str = Depends(require_session)) -> dict:
+    """Play a head gesture: nod, shake, tilt, or scan.
+
+    At gesture priority -- above following a person, below the joystick -- and
+    refused under e-stop. The simulated robot plays it on its simulated head.
+    """
+    payload = await request.json()
+    kind = str(payload.get("kind", "")).strip() if isinstance(payload, dict) else ""
+    if not kind:
+        raise HTTPException(400, 'body must be {"kind": "nod" | "shake" | "tilt" | "scan"}')
+    return _confirmed(await _capable(request, "gestures").trigger_gesture(kind))
+
+
+@router.get("/api/camera/snapshot")
+async def camera_snapshot(request: Request, user: str = Depends(require_session)) -> Response:
+    """The robot camera's latest picture, as a JPEG.
+
+    Polled by the Vision tab rather than streamed: the panel subscribes to the
+    camera only while pictures are being asked for, and drops the subscription
+    a few seconds after they stop. The first request only arms it, hence 503
+    with Retry-After until a frame has arrived.
+    """
+    bridge = _capable(request, "robot_camera")
+    jpeg = await bridge.camera_snapshot()
+    if jpeg is None:
+        return Response(status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"})
+    return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 # -- link (model-conn's host/receiver connection) --------------------------

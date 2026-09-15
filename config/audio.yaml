@@ -1,0 +1,58 @@
+# Neo's audio path -- committed defaults. No secrets in this file.
+#
+# Per-machine values (the ALSA device name, the wake word model path) go in
+# config/audio.local.yaml, which is gitignored and merged over this one key by
+# key. Naming one key there leaves every other value here standing.
+
+mic:
+  # ALSA device, e.g. "plughw:2,0". Empty means the first capture device
+  # `arecord -l` reports, which is right with exactly one USB mic attached.
+  # `plughw:` rather than `hw:` matters: it lets ALSA convert for a mic that
+  # cannot itself do 16 kHz mono, which is most of them.
+  device: ""
+  # 16 kHz is what /audio/in promises and what Vosk wants. The wake word model
+  # wants 44.1 kHz and resamples internally -- it only reads 0-5 kHz, so
+  # capturing at 16 kHz loses nothing it looks at.
+  sample_rate: 16000
+  chunk_ms: 100
+
+speaker:
+  device: ""
+  # What Piper synthesises at, and what /audio/out promises.
+  sample_rate: 22050
+
+wakeword:
+  # A Teachable Machine *audio* project exported as TensorFlow.js -- point this
+  # at the .zip as downloaded; it does not need unpacking. Runs in numpy, so
+  # there is no TensorFlow on the Pi (see neo_audio/wakeword.py).
+  model_path: ""
+  # Probability the wake class must reach. Deliberately high: a false accept
+  # opens the mic and sends the room's speech to the model host, which is a
+  # worse failure than having to repeat yourself.
+  threshold: 0.85
+  # Relaxed while perception reports a person in frame. Someone at the desk
+  # saying something half-matching is far likelier to mean it than the same
+  # sound in an empty room. WakeEvent.threshold_applied records which was used.
+  threshold_with_person: 0.70
+  # Overlapping windows that must clear the threshold in a row. A real
+  # utterance clears several; a door slam clears at most one.
+  consecutive_hits: 2
+  # Quiet after firing, so one "NEO" does not fire on every window that still
+  # contains it for the following second.
+  refractory_s: 2.0
+  # Spectrogram frames between evaluations: 6 x 23.22 ms = 139 ms.
+  hop_frames: 6
+
+endpointer:
+  # Quiet after speech before the listening window closes. Under ~0.7 s this
+  # clips people who pause mid-sentence; over ~1.2 s Neo feels deaf.
+  silence_to_end_s: 0.9
+  # A window that opens and hears nothing: usually a false wake.
+  max_wait_for_speech_s: 4.0
+  # A ceiling, so a stuck-open mic cannot stream the room to the model host.
+  max_utterance_s: 15.0
+  # Times the adaptive noise floor that counts as speech. A ratio rather than a
+  # level, so it survives a change of room, mic gain or distance.
+  speech_start_ratio: 3.0
+  min_speech_s: 0.25
+  noise_floor_alpha: 0.05

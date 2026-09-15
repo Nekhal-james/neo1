@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>neo_audio</name>
+  <version>0.1.0</version>
+  <description>
+    The microphone, the speaker, the wake word and speech to text.
+
+    The wake word runs in numpy against a Teachable Machine export, so there is
+    no TensorFlow on the Pi. The mic and speaker are arecord/aplay subprocesses,
+    so a USB device that is unplugged mid-run is recoverable rather than fatal.
+  </description>
+  <maintainer email="funkydude450@gmail.com">Nekhal James</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>neo_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <!--
+    arecord and aplay come from alsa-utils, which scripts/pi/setup-system.sh
+    installs with apt. Not listed here: it is not a rosdep key, and one unknown
+    key makes rosdep install over src/ fail the whole Pi setup.
+    speech to text and synthesis (vosk, piper) are pip installs, reached through
+    the intelligence package from the repo root setup.py.
+  -->
+  <exec_depend>intelligence</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

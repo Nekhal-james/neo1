@@ -30,6 +30,7 @@ setup(
     entry_points={
         "console_scripts": [
             "perception_node = neo_perception.nodes.perception_node:main",
+            "camera_hw = neo_perception.nodes.camera_hw:main",
         ],
     },
 )

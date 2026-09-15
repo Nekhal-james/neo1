@@ -105,8 +105,9 @@ bash ~/neo1/scripts/pi/setup-user.sh
 ```
 
 `setup-system.sh` accepts `--eth-address 192.168.50.2/24` to change the static
-address, `--with-panel-service` to install the admin panel as a systemd
-unit that survives reboots, and `--servo-pwm` when the servos' signal wires go
+address, `--with-panel-service` and `--with-robot-service` to install the admin
+panel and the robot's ROS graph as systemd units that start on boot (§6), and
+`--servo-pwm` when the servos' signal wires go
 straight to the Pi's hardware PWM pins (see [hardware.md](hardware.md); it turns
 off the 3.5 mm audio jack). Both scripts are idempotent: after a failure, fix
 the cause and re-run. After syncing a newer checkout, re-run `setup-user.sh`.
@@ -116,7 +117,7 @@ What the system script sets up, and why each one:
 | | |
 |---|---|
 | ROS 2 Jazzy `ros-base` + CycloneDDS | no desktop on a headless Pi |
-| `rosdep install` over `src/` | the command CI runs; the six pip-owned packages carry `COLCON_IGNORE` and are skipped |
+| `rosdep install` over `src/` | the command CI runs; installs what the nodes import (`cv_bridge`, `vision_msgs`, ...). `neo_webapp` carries `COLCON_IGNORE` and is skipped |
 | `neo` in `i2c`, `video`, `audio`, `dialout` | servo driver, camera and mic without root |
 | `dtparam=i2c_arm=on` | the PCA9685 lives on I2C-1 ([wiring](hardware.md)) |
 | `noble-updates` in the apt sources | some Pi images ship without it, and then ROS cannot install |
@@ -129,9 +130,17 @@ It **generates** the network config but does not apply it, because
 `netplan apply` can drop the very SSH session the script is running in. The
 reboot applies it.
 
-`setup-user.sh` also writes `config/intelligence.local.yaml` (model paths) and
-`config/model_conn.local.yaml` (the laptop at `192.168.50.1`) — but only when
-they do not exist, so it never overwrites a file you have edited.
+`setup-user.sh` also writes `config/intelligence.local.yaml` (model paths),
+`config/model_conn.local.yaml` (the laptop at `192.168.50.1`) and
+`config/audio.local.yaml` (the wake word export it finds in `models/wakeword/`)
+— but only when they do not exist, so it never overwrites a file you have
+edited.
+
+**The wake word model is yours, not a download.** Train it in Teachable Machine
+as an audio project, export it as TensorFlow.js, and put the `.zip` in
+`models/wakeword/` on the laptop before syncing (or copy it straight to
+`~/neo1/models/wakeword/` on the Pi). How to train it so ordinary speech does not
+fire it: [src/neo_audio/README.md](../src/neo_audio/README.md).
 
 ## 4. The steps that stay yours
 
@@ -164,8 +173,10 @@ ros2 interface show neo_msgs/msg/HeadCommand
 # Hardware, once it is wired:
 i2cdetect -y 1                  # the PCA9685 answers at 0x40
 ~/neo-venv/bin/neo-servo-check  # read-only; wiring and the next steps: docs/hardware.md
-rpicam-hello --list-cameras     # or `cam -l`; Bench A in the plan
+lsusb                           # the USB webcam/mic must be listed here first
+v4l2-ctl --list-devices         # a USB camera adds its own /dev/video*, beside the bcm2835 codec nodes
 arecord -l                      # the USB mic
+~/neo-venv/bin/neo-audio-check  # devices, wake word model, speech; then --listen, --say "hello"
 
 # The link to the laptop:
 ~/neo-venv/bin/neo --connection:status
@@ -174,13 +185,36 @@ arecord -l                      # the USB mic
 From the laptop or your phone, once the panel is running on the Pi:
 `https://neo-pi.local:8443`.
 
+## 6. Run the robot
+
+```bash
+bash ~/neo1/scripts/pi/neo-up.sh --check     # what would start, and whether it imports
+bash ~/neo1/scripts/pi/neo-up.sh --panel     # the ROS graph plus the admin panel
+```
+
+`--profile dev` runs with no hardware at all; ctrl-C stops the graph (the panel,
+started with `--panel`, keeps running — its pid is in `var/panel.pid`). To start
+both at every boot:
+
+```bash
+sudo bash ~/neo1/scripts/pi/setup-system.sh --with-robot-service --with-panel-service
+sudo systemctl start neo-robot neo-panel
+journalctl -u neo-robot -f                   # the graph's log
+```
+
+Always through these scripts, never `ros2 launch` or `neo --webapp up` by hand:
+the robot script makes the venv's speech packages importable by ROS's own
+interpreter, and the panel script keeps the panel on the robot's DDS domain.
+Get either wrong and nothing errors — the voice nodes report a package as "not
+installed" that is, or the panel shows `backend: mock` and controls a simulated
+robot. The header badge says `backend: ros` when it is right.
+
 ## What this deliberately does not do
 
 - **The Phase 0 benchmarks** (camera, YOLO, Piper, wake word, Vosk, off-board
   LLM). They measure the hardware and belong in `docs/hardware.md`; the setup
   only makes them runnable.
-- **Start the ROS nodes.** They are not built yet — each `nodes/*.py` raises
-  `NotImplementedError`. The panel runs against its simulated bridge until they
-  are.
+- **Start the robot.** Setup ends with the services installed at most, never
+  started: the first start is yours, after the steps in §4 (§6).
 - **Export YOLO to NCNN** for the Pi (Bench B). The PyTorch model runs as
   installed; NCNN is the optimisation once the benchmark says it is needed.

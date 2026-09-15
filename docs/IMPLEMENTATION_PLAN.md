@@ -299,6 +299,30 @@ Do not put logic in `neo_msgs`. Do not add an `rclpy` dependency to `neo_kb`.
 *Goal: the hardware/webapp seam plus the operator surface, built before any consumer exists.*
 *Estimate: 7–9 days. The highest-leverage phase in the plan, and now the largest.*
 
+### 2.0 Status: landed, with two deliberate departures from 2.1
+
+The panel core landed long ago. The ROS half now exists too: `neo_sources`
+(`source_manager`), `camera_hw` in `neo_perception`, and `mic_hw` / `speaker_hw`
+in `neo_audio`. How it differs from the plan below, and why:
+
+* **No lifecycle nodes; backends gate themselves.** `source_manager` publishes a
+  *latched* `/sources/state` and each hardware backend releases or takes its
+  device on receipt. A transactional activate/deactivate owned by one manager
+  is one process whose crash can leave a microphone hot; self-gating backends
+  fail closed, and a backend that starts late still learns the selection.
+* **The mux is inside `source_manager`**, not a `StreamMux` per stream: it
+  forwards `/camera/webapp/image_raw`, `/audio/webapp/in` and
+  `/audio/out → /audio/webapp/out` only while that stream is on webapp, and
+  estimates `/audio/playing` for the browser speaker from a play cursor.
+* `camera_hw` is OpenCV over V4L2 for the USB webcam this robot uses, not
+  `camera_ros`; it picks the node that actually yields a frame, because a Pi's
+  bcm2835 codec nodes open and never deliver. `mic_hw` / `speaker_hw` are
+  `arecord` / `aplay` subprocesses, recoverable when a USB device is unplugged.
+
+Not done: step 7's `launch_testing` suite (the mux logic is unit-tested, and the
+graph was driven end to end by hand in WSL), and a run on the Pi with the
+hardware attached — the USB webcam/mic did not enumerate when this was written.
+
 ### 2.1 The mux pattern
 
 Two mechanisms working together:
@@ -443,13 +467,35 @@ Do not add face recognition or identity. Do not chase fps with a bigger model.
 *Goal: "Neo" wakes the robot; speech becomes text **without the laptop**; text becomes speech.*
 *Estimate: 6–7 days (up from revision 1 — local ASR is now in scope).*
 
-### 5.0 Status: ASR, TTS and the spoken turn landed; the gate has not
+### 5.0 Status: the gate landed, on the robot's own graph
 
-Speech-to-text and text-to-speech are implemented, and joined on the admin
-panel's Audio tab into a spoken turn. Steps 5 and 6 below — sentence-streamed
-TTS and the half-duplex guard — are built there. What is **not** built is steps
-1-3 — the wake word and VAD endpointing — which is to say the gate itself, plus
-the off-board Whisper branch of step 4. Read §5.1 as still entirely outstanding.
+Everything in §5.1 now exists as nodes in `neo_audio`, and a turn has been
+driven through them under ROS (in WSL; not yet on the Pi's USB mic):
+
+* **Step 1, differently: the wake word is a Teachable Machine audio export**,
+  not openWakeWord. The owner trained it; it runs in numpy
+  (`neo_audio/wakeword.py`) by reproducing the browser spectrogram the model was
+  trained on, so the Pi carries no TensorFlow. Measured against Piper's voice on
+  the first export: "neo" 1.00, "hello" 0.998, "banana" 0.49 — the background
+  class needs speech in it, and the step-8 false-accept measurement is owed.
+* **Step 2, `wake_word`**: consecutive-window hits, a refractory period, the
+  person-present threshold recorded in `WakeEvent.threshold_applied`, a
+  `/wake/score` topic for the Audio tab's meter, and muting on `/audio/playing`
+  (+1.2 s) and on any non-IDLE `/dialog/state`.
+* **Step 3, differently: an energy endpointer** against an adaptive noise floor
+  rather than Silero VAD — 0.9 s trailing quiet, 15 s cap, 0.25 s minimum,
+  0.4 s pre-roll so "Neo, where is…" in one breath keeps its first word.
+* **Step 4, Vosk only**: `asr_router` transcribes exactly the wake window and
+  always sends one final transcript, empty for a window where nobody spoke.
+  Whisper and the room-code grammar are still absent.
+* **Steps 5 and 6** moved into `tts` (sentence-streamed Piper, `/dialog/cancel`)
+  and the half-duplex gate described above; `speaker_hw` and the source mux
+  both publish the *audible* end of playback, not the write.
+* **Step 7**: the Audio tab shows the robot's live wake score, what it heard and
+  said, and can open the window by hand. The threshold is set in
+  `config/audio.local.yaml` with `neo-audio-check --listen`, not a slider.
+
+The panel's in-process spoken turn below still exists, for the simulated robot.
 
 What exists:
 
@@ -487,11 +533,10 @@ What exists:
 
 Two consequences worth being explicit about:
 
-* **Nothing gates recognition yet.** On the panel, the mic channel being open
-  *is* the listening window. That is a deliberate stand-in, not a violation of
-  the CLAUDE.md invariant: the operator opening the channel is an explicit act.
-  When `wake_word` lands it takes that role, and `asr_router` subscribes only
-  inside the window it opens.
+* **On the simulated robot, the mic channel is still the window.** The panel's
+  in-process voice loop has no wake word; the operator opening the channel is
+  the explicit act. Under the ROS bridge the panel no longer transcribes browser
+  audio at all — it goes through the mux to the robot's own wake word.
 * **The off-board Whisper branch of step 4 is still absent.** Vosk is the only
   engine, which is the right default — it is the one that works with the laptop
   closed.
@@ -645,6 +690,22 @@ Do not block this phase on complete campus data. The point of the design is that
 *Goal: one explicit state machine owning the conversation.*
 *Estimate: 3–4 days.*
 
+### 8.0 Status: the core state machine landed
+
+`intelligence/nodes/dialog_node.py` owns `/dialog/state`: `/wake/event` →
+LISTENING, a final non-empty transcript → THINKING, and SPEAKING / IDLE from
+the `tts` node's `/dialog/speaking`, so the badge follows audible speech rather
+than a published reply. An empty final (a false wake) returns to IDLE.
+`degraded` comes from `/link/health`. Answering runs on a worker thread, so a
+cold or absent model host never stalls the state topic; one turn at a time,
+no queue. "What is this" is routed to `/perception/identify` and answered
+without the model host. Replies go out on `/dialog/reply` for `tts`.
+
+Not built: steps 2 (a thinking timeout beyond `chat.timeout_s`, a speaking
+watchdog), 3 (follow-up window), 4 (conversation context), 5 (filler) and 6
+(`launch_testing`). The routing core is unit-tested; the full turn was driven by
+hand through the graph.
+
 ### Steps
 
 1. **`dialog_manager`** implements the state machine over `/dialog/state`: `IDLE → (wake) → LISTENING → (endpoint) → THINKING → SPEAKING → IDLE`, with `DEGRADED` as a modifier and `ESTOP` as an override. Every transition logged with timing.
@@ -663,6 +724,20 @@ A full exchange works end to end in the `dev` profile with only a browser and no
 
 *Goal: the head reads as alive and its motion reflects state. A modifier on motion, never a second actuator path.*
 *Estimate: 4 days.*
+
+### 9.0 Status: landed except the tuning surface
+
+Steps 1–3 exist: `emotion_node` publishes `/emotion/state`; `head_behavior`
+blends idle drift, micro-motion, tilt bias and gaze gain from it; and gestures
+are bounded overlays. `emotion_node` names one on `/emotion/gesture` — a nod
+when someone arrives, a tilt on entering CURIOUS, a shake on entering CONFUSED,
+at most one per 2.5 s — and `head_behavior` plays it at GESTURE priority,
+relative to where the head rests, mirroring `neo_emotion.motion`'s shapes (a
+test holds the two copies equal). Emotion still has no path to `servo_driver`.
+
+The Emotion tab shows the mood and has gesture buttons. Not built: the manual
+mood override, live parameter sliders, and step 5's property test over random
+parameters (the driver clamps every command regardless).
 
 ### 9.1 Model
 
@@ -699,6 +774,14 @@ Do not give `emotion_node` its own path to `servo_driver`. Do not add a face or 
 
 *Goal: it survives contact with actual students.*
 *Estimate: 6–8 days.*
+
+### 10.0 Status: bringup and deployment units exist; the field work has not started
+
+Step 1's profiles have existed since Phase 1. Step 5's units exist:
+`neo-robot.service` runs `scripts/pi/neo-up.sh` and `neo-panel.service` runs
+`scripts/pi/neo-panel.sh`, both `Restart=on-failure`, installed by
+`setup-system.sh --with-robot-service --with-panel-service`. The graph stops on
+SIGINT so the servo driver shuts down cleanly. Steps 2–4 and 6–8 are untouched.
 
 ### Steps
 

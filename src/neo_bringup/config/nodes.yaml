@@ -16,22 +16,22 @@ nodes:
     package: neo_sources
     executable: source_manager
     phase: 2
-    description: Owns /sources/set; activates one backend and deactivates the other.
+    description: Owns /sources/set; publishes the latched state each backend gates itself on.
   camera_hw:
     package: neo_perception
     executable: camera_hw
     phase: 2
-    description: Pi Camera (CSI) via camera_ros, as a managed lifecycle node.
+    description: The Pi's USB webcam, found by which V4L2 node actually yields a frame.
   mic_hw:
     package: neo_audio
     executable: mic_hw
     phase: 2
-    description: USB microphone on the Pi.
+    description: USB microphone on the Pi, captured through arecord.
   speaker_hw:
     package: neo_audio
     executable: speaker_hw
     phase: 2
-    description: Attached speaker.
+    description: USB speaker through aplay; the 3.5 mm jack is off, it shares the servo PWM block.
 
   # --- Phase 3: motion -------------------------------------------------------
   servo_driver:

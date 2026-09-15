@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # The six Python packages, plus the two ROS packages' pure-Python tests.
+  # The eight Python packages, plus the two ROS packages' pure-Python tests.
   # No ROS install: everything here is deliberately runnable on a bare laptop,
   # which is what lets most of the project be developed without a robot.
   # ---------------------------------------------------------------------------
@@ -38,7 +38,8 @@ jobs:
         run: |
           set -e
           for pkg in src/neo_webapp src/neo_perception src/neo_motion \
-                     src/neo_emotion src/model-conn src/intelligence \
+                     src/neo_emotion src/neo_audio src/neo_sources \
+                     src/model-conn src/intelligence \
                      src/neo_msgs src/neo_bringup; do
             echo "::group::$pkg"
             (cd "$pkg" && python -m pytest -q)
@@ -80,9 +81,10 @@ jobs:
           set -e
           apt-get update
           rosdep update --rosdistro jazzy
-          # Only neo_msgs and neo_bringup are built: the six Python packages
-          # carry a COLCON_IGNORE, because pip owns their install (see the root
-          # setup.py, and the note inside any of those files).
+          # Every package with a package.xml is resolved and built except
+          # neo_webapp, which carries COLCON_IGNORE: the panel is not a launched
+          # node. An exec_depend that is not a rosdep key fails here, which is
+          # the point -- the same command runs in scripts/pi/setup-system.sh.
           rosdep install --from-paths src --ignore-src -y --rosdistro jazzy
 
       - name: Build

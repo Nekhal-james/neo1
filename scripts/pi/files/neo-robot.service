@@ -1,0 +1,33 @@
+# Neo: the robot itself -- the ROS 2 graph under a launch profile -- as a service.
+#
+# Installed by `setup-system.sh --with-robot-service`. Enabled but not started:
+# it needs setup-user.sh to have built the workspace first, and a wake word
+# model in config/audio.local.yaml for the voice to come up.
+#
+# To run a different profile:  sudo systemctl edit neo-robot
+#   [Service]
+#   Environment=NEO_PROFILE=dev
+#
+# @USER@, @REPO@ and @VENV@ are filled in by scripts/pi/setup-system.sh.
+[Unit]
+Description=Neo robot (ROS 2 graph)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@
+Environment=NEO_VENV=@VENV@
+Environment=NEO_PROFILE=hardware
+ExecStart=/bin/bash @REPO@/scripts/pi/neo-up.sh
+# SIGINT, as ctrl-C would send. ros2 launch and every rclpy node shut down
+# cleanly on it, and servo_driver's shutdown stops the servos rather than
+# leaving the last pulse running -- which a SIGKILL would.
+KillSignal=SIGINT
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

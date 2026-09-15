@@ -92,6 +92,9 @@ class MockBridge(Bridge):
         super().__init__()
         self._state = RobotState(backend=self.name)
         self.perception = perception
+        # No robot voice or robot camera here: the simulated robot's voice is
+        # the panel's own loop, and its camera is the browser's.
+        self._state.capabilities = ["gestures"] + (["perception"] if perception is not None else [])
         self._state.nodes = [
             NodeStatus(name=n, state="missing")
             for n in (
@@ -230,6 +233,26 @@ class MockBridge(Bridge):
         self._state.head.tilt_deg = 0.0
         self._state.head.at_limit = False
         return Result(ok=True, message="centered")
+
+    async def trigger_gesture(self, kind: str) -> Result:
+        """Play a gesture on the simulated head.
+
+        Through `EmotionMotion`, the same overlay the robot's head_behavior
+        mirrors. Here it rides the idle source, so it shows whenever nothing
+        higher is driving; on the robot it has its own priority above gaze.
+        """
+        from neo_emotion.motion import GestureKind
+
+        try:
+            gesture = GestureKind((kind or "").strip().lower())
+        except ValueError:
+            names = ", ".join(g.value for g in GestureKind)
+            return Result(ok=False, message=f"unknown gesture {kind!r}; one of {names}")
+        if self._state.head.estop:
+            return Result(ok=False, message="estop engaged")
+        self._emotion_motion.trigger(gesture, self._now)
+        self._state.conversation.last_gesture = gesture.value
+        return Result(ok=True, message=gesture.value)
 
     # -- media in ----------------------------------------------------------
 

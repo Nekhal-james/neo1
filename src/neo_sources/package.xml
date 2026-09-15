@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>neo_sources</name>
+  <version>0.1.0</version>
+  <description>
+    Owns /sources/set and publishes /sources/state: which of the two backends
+    (the Pi hardware or the admin panel browser) is live for the camera, the
+    microphone and the speaker.
+
+    The backend nodes gate themselves on the state this publishes rather than
+    being started and stopped, so a crash here cannot leave a microphone hot.
+
+    Also the mux for the browser: the panel's camera, microphone and speaker
+    topics reach the graph only while their stream is switched to webapp.
+  </description>
+  <maintainer email="funkydude450@gmail.com">Nekhal James</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>neo_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

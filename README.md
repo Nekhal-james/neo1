@@ -13,17 +13,20 @@ tracks what currently exists.
 
 ## Status
 
-Eight packages under `src/` are implemented and tested. The wake word has not
-been started; the campus knowledge base is partly built (see below).
+Ten packages under `src/` are implemented and tested, and the robot runs as a
+ROS graph from one command (`bash scripts/pi/neo-up.sh`). The campus knowledge
+base is partly built (see below).
 
 | Package | Implements | Status |
 |---|---|---|
-| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, Audio, Dialog and Data tabs live (Data edits the campus files, checks them, and tries questions against them); password change and recovery-code reset; Emotion/Logs are stubs filled in by later phases |
-| [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification |
+| [`neo_webapp`](src/neo_webapp/README.md) | Phase 2 — admin panel (API, media bridge, operator UI) | Sources, System, Head, Vision, Audio, Dialog and Data tabs live (Data edits the campus files, checks them, and tries questions against them); password change and recovery-code reset; the Emotion tab (mood, gesture buttons). Against the robot the panel drives its ROS graph: open the listening window, ask aloud, say something, stop talking, the robot camera, centre and e-stop. Logs is a stub |
+| [`neo_perception`](src/neo_perception/README.md) | Phase 4 — detection, gestures, gaze engagement | Pure-Python pipeline + ROS node wrapper; palm-gesture engagement, facing-based release, on-demand object identification (served as `/perception/identify` for a spoken "what is this"); `camera_hw` publishes the USB webcam, choosing the V4L2 node that actually yields a frame |
 | [`neo_motion`](src/neo_motion/README.md) | Phase 3 — head arbitration and the servo driver | Priority arbiter with crossfade and source expiry; driver enforcing clamp/slew/deadband/watchdog/e-stop against a mock backend, the Pi's hardware PWM (the robot's wiring: continuous-rotation MG995s on GPIO18/19, head angle dead-reckoned), or a PCA9685; per-axis calibration in `config/motion.yaml`, and continuous servos are not driven until it is measured |
-| [`neo_emotion`](src/neo_emotion/README.md) | Phase 9 — mood and the movement it shapes | Event-driven state machine with dwell times; idle drift, micro-motion, and bounded gesture overlays. Publishes parameters only — no path to the servos |
+| [`neo_emotion`](src/neo_emotion/README.md) | Phase 9 — mood and the movement it shapes | Event-driven state machine with dwell times; idle drift, micro-motion, and bounded gesture overlays. The node nods when someone walks up and tilts or shakes on entering a curious or confused mood, which `head_behavior` plays at gesture priority. Publishes parameters and gesture names only — no path to the servos |
+| [`neo_audio`](src/neo_audio/README.md) | Phases 2/5 — mic, speaker, wake word, speech to text | The wake word from a Teachable Machine export run in numpy; an adaptive-floor endpointer; `mic_hw`/`speaker_hw` over `arecord`/`aplay`, surviving an unplugged USB device; `asr_router` (Vosk over the wake window, with pre-roll) and `tts`; `neo-audio-check` for levels, live wake scores and a spoken round trip |
+| [`neo_sources`](src/neo_sources/README.md) | Phase 2 — source selection | `source_manager`: `/sources/set`, a latched `/sources/state` the hardware backends gate themselves on, and the mux that lets a browser's camera, mic and speaker stand in for the robot's |
 | [`model_conn`](src/model-conn/README.md) | Phase 6 (partial) — the off-board LLM host/receiver link | CLI for serving the model (host) and checking the link (receiver); real mTLS via a private CA (`neo --tls init`) |
-| [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; streaming Vosk STT and sentence-streamed Piper TTS, joined into a spoken conversation on the panel's Audio tab; Neo's system prompt; vectorless retrieval over `rooms`/`graph`/`coverage` YAML (whole-phrase matching on codes, names and aliases, spoken numbers folded in), sent to the model as only the matched entries and answered from templates when the model host is away |
+| [`intelligence`](src/intelligence/README.md) | Phases 5/6/7 (partial) — prompts, RAG data, chat/ASR/TTS | Chat works end to end via `model_conn`'s link; streaming Vosk STT and sentence-streamed Piper TTS, joined into a spoken conversation on the panel's Audio tab; Neo's system prompt; vectorless retrieval over `rooms`/`graph`/`coverage` YAML (whole-phrase matching on codes, names and aliases, spoken numbers folded in), sent to the model as only the matched entries and answered from templates when the model host is away; the `dialog` node runs the robot's turn (wake → listen → answer → speak) off its executor thread and sends "what is this" to the camera, not the model |
 | [`neo_msgs`](src/neo_msgs/README.md) | Phase 1 — the frozen message/service contracts | All 15 interfaces defined; a contract test guards them against drifting from the Python mirrors the panel runs on |
 | [`neo_bringup`](src/neo_bringup/README.md) | Phase 1 — launch profiles | `dev`, `hardware`, `hybrid`, `bench`; the node registry lists every node the robot will run and which phase makes it real |
 
@@ -32,7 +35,7 @@ All of them run with no Pi, no ROS, and no servos attached — `neo_webapp` via 
 mock servo backend, `neo_perception` against any camera the panel is using,
 `model_conn`/`intelligence` against whatever endpoints you point them at.
 
-886 tests. Run each package from inside its own directory
+1,032 tests. Run each package from inside its own directory
 (`cd src/neo_webapp && python -m pytest -q`) — the per-package `tests/conftest.py`
 files collide if you point pytest at `src/` as a whole. `neo_msgs` and
 `neo_bringup` are tested the same way with plain pytest: their tests read the
@@ -69,12 +72,23 @@ is what validates the message contracts as IDL rather than as text.
   it Neo speaks the degraded reply instead. Downloading a Vosk model and a Piper
   voice is the only setup — until then the Audio tab says exactly which path is
   missing rather than failing silently.
+- **Wake to its name.** Say "Neo" and the robot's own wake word — a Teachable
+  Machine model, run without TensorFlow — opens a listening window; it
+  transcribes the question, answers from the campus directory or the model host,
+  and speaks through its own speaker. Nothing it hears before its name is
+  transcribed or sent anywhere.
+- **React with its head.** A nod when someone walks up; a tilt when curious, a
+  shake when it cannot help — played over whatever the head is already doing,
+  below the joystick, never under e-stop.
+- **Be run from a browser.** The admin panel, connected to the running robot,
+  shows the live wake score, what was heard and said, and the robot camera; it
+  can open the listening window, ask a question aloud, make Neo say something,
+  stop it, play a gesture, and swap any of camera, mic or speaker for the
+  browser's own.
 
-Not yet: it cannot wake to its own name or answer a campus question from real
-data. The motion stack is complete and the panel drives it, but against a mock
-servo backend — no servo has been driven by it yet (the MG995s wire straight to the Pi's hardware PWM pins; see [docs/hardware.md](docs/hardware.md)). Speech works, but it is not yet *gated* by the wake
-word — on the panel, opening the mic channel is what opens the listening
-window. See *Not built yet* below.
+Not yet: it has no campus data to answer from — rooms are entered on the Data
+tab. The whole graph has been driven end to end under ROS in WSL, but not yet on
+the Pi with its USB webcam and microphone attached. See *Not built yet* below.
 
 ## Repo layout
 
@@ -85,23 +99,31 @@ setup.py                     installs all of src/ together for local dev (see be
 config/webapp.yaml           committed defaults for the admin panel
 config/model_conn.yaml       committed defaults for the model connection
 config/intelligence.yaml     committed defaults for prompts/chat/asr/tts
+config/audio.yaml            committed defaults for the mic, speaker, wake word
+config/motion.yaml           the servo model, wiring and calibration
+scripts/pi/                  Pi provisioning, neo-up.sh / neo-panel.sh, systemd units
+models/                      downloaded and trained models (gitignored)
 src/
   neo_webapp/                admin panel: API + media bridge + operator UI
-  neo_perception/            YOLO pose pipeline, gestures, gaze/engagement
+  neo_perception/            YOLO pose pipeline, gestures, gaze/engagement, camera_hw
+  neo_motion/                head arbiter, servo driver, neo-servo-check
+  neo_emotion/               mood, idle motion, gestures
+  neo_audio/                 mic, speaker, wake word, asr_router, tts, neo-audio-check
+  neo_sources/               source selection and the browser mux
   model-conn/                neo CLI: off-board LLM host serving + link checks
-  intelligence/              prompts, RAG data, chat/ASR/TTS
+  intelligence/              prompts, RAG data, chat/ASR/TTS, the dialog node
   neo_msgs/                  frozen message + service contracts (ROS, no logic)
   neo_bringup/               launch profiles and the node registry (ROS)
 docs/security.md             the CA, the three certificates, installing them
 .github/workflows/ci.yml     pytest + lint + a colcon build on Jazzy
 ```
 
-There is exactly one way to `pip install` this repo: from the root, below. The
-six Python packages keep their own `package.xml` but have no `setup.py` of
-their own, so there's no independent per-package install path to fall out of
-sync with the root one. They carry a `COLCON_IGNORE` for the same reason —
-`colcon build` covers `neo_msgs` and `neo_bringup`, pip covers the rest, and
-CLAUDE.md explains what that split does and does not buy.
+There is exactly one way to `pip install` this repo: from the root, below.
+The ROS packages also carry a `setup.py` of their own, used only by
+`colcon build` so `ros2 launch` can find their nodes; `neo_webapp` is the one
+that does not, because the panel is not a launched node. CLAUDE.md explains the
+split, and why running the robot needs the venv's packages without the venv
+activated.
 
 ## Getting started
 
@@ -147,6 +169,21 @@ SSH key and Wi-Fi, run `scripts/pi/sync-to-pi.sh` from the laptop, then
 `setup-system.sh` (with sudo) and `setup-user.sh` on the Pi. The full
 walk-through, including the steps that stay manual because they need a password
 or a certificate, is [docs/pi-setup.md](docs/pi-setup.md).
+
+**Starting the robot**, on the Pi:
+
+```bash
+bash scripts/pi/neo-up.sh --check     # what would start, and whether each module imports
+bash scripts/pi/neo-up.sh --panel     # the ROS graph ('hardware' profile) plus the admin panel
+neo-audio-check --listen              # tune the wake word: live scores while you say "Neo"
+```
+
+To start both at every boot, install the services once:
+`sudo bash scripts/pi/setup-system.sh --with-robot-service --with-panel-service`.
+Use the scripts rather than `ros2 launch` and `neo --webapp up` directly: the
+first makes the venv's speech packages visible to ROS's interpreter, the second
+keeps the panel on the robot's DDS domain — without them the voice nodes fail to
+import and the panel quietly runs its simulated robot.
 
 To run the admin panel against a simulated robot:
 
@@ -238,6 +275,7 @@ existing on every code path that loads that config.
 | `NEO_MOTION_CONFIG` | `neo_motion` | `neo-servo-check`'s `--config` |
 | `NEO_MODEL_CONN_CONFIG` | `model_conn` | `neo`'s top-level `--config` |
 | `NEO_INTELLIGENCE_CONFIG` | `intelligence` | (no CLI flag of its own; set this to override `config/intelligence.yaml` for `neo --prompt`, the panel's Dialog/Audio tabs, etc.) |
+| `NEO_AUDIO_CONFIG` | `neo_audio` | `neo-audio-check`'s `--config` |
 
 ### `neo` -- the model-conn CLI (installed by `pip install -e ".[dev]"`)
 
@@ -321,6 +359,21 @@ most are mutually exclusive move modes.
 | `--turns` | `FLOAT` | Full rotations counted by hand while `--record-speed`'s pulse was running (magnitude only; direction comes from which side of neutral the pulse is on, not the sign here). Required with `--record-speed`. |
 | `--seconds` | `FLOAT` | How long that pulse ran for, in seconds -- the denominator of the deg/s calculation. Required with `--record-speed`; must be positive. |
 
+### `neo-audio-check` -- the microphone, speaker, wake word and speech path
+
+With no arguments it lists the ALSA capture and playback devices, loads the wake
+word model, and reports whether speech to text and synthesis are available.
+Nothing is recorded or played. The rest are mutually exclusive.
+
+| Flag | Takes | Meaning |
+|---|---|---|
+| `--config` | `PATH` | Use exactly this audio config instead of the merged `config/audio.yaml` + `config/audio.local.yaml`. |
+| `--listen` | -- | Live wake word scores from the mic, one bar per window, marking each accepted firing. How `wakeword.threshold` is chosen. |
+| `--record` | -- | Record and print RMS levels, to tell a muted or wrong device from a model problem. |
+| `--say` | `TEXT` | Synthesise `TEXT` with Piper and play it through the speaker, waiting until it has finished sounding. |
+| `--transcribe` | -- | Transcribe what you say, closing on the same endpointer the robot uses. |
+| `--seconds` | `FLOAT` (default `10`) | How long `--listen`, `--record` or `--transcribe` runs. |
+
 ### `neo-perception-bench` -- benchmark and validate a detector backend
 
 | Flag | Takes | Meaning |
@@ -337,6 +390,7 @@ most are mutually exclusive move modes.
 |---|---|---|
 | `--eth-address` | `CIDR` (default `192.168.50.2/24`) | Static address to assign `eth0` -- the Ethernet path of the dual-path link to the off-board host. |
 | `--with-panel-service` | -- | Install and enable a `neo-panel.service` systemd unit, so the admin panel starts on boot rather than needing a manual `neo --webapp up`. |
+| `--with-robot-service` | -- | Install and enable `neo-robot.service`, which runs `scripts/pi/neo-up.sh` (the ROS graph, profile `hardware`) at boot. Change the profile with `sudo systemctl edit neo-robot` and `Environment=NEO_PROFILE=dev`. |
 | `--servo-pwm` | -- | Enable the Pi's hardware PWM on GPIO18/GPIO19 (`dtoverlay=pwm-2chan`) for servos wired straight to the Pi, add the `pwm` group and udev rule so `neo-servo-check` needs no root, and disable the 3.5 mm audio jack (it shares that same hardware block) -- the speaker must then be USB. |
 | `-h`, `--help` | -- | Print the usage block from the top of the script and exit. |
 
@@ -354,6 +408,27 @@ Any other flag is rejected with `unknown option: ... (try --help)`.
 | `NEO_EXTRAS` | `dev,detector,voice,servo` | Which `pip install -e ".[...]"` extras to install into it. |
 | `NEO_LAPTOP_ETH` | `192.168.50.1` | The off-board host's static Ethernet address, written into the per-machine config this script generates. |
 
+### `scripts/pi/neo-up.sh` -- start the robot (on the Pi, as its user)
+
+| Flag | Takes | Meaning |
+|---|---|---|
+| `--profile` | `NAME` (default `hardware`, or `$NEO_PROFILE`) | Which `neo_bringup` profile to launch: `dev`, `hardware`, `hybrid`, `bench`. |
+| `--panel` | -- | Also start the admin panel in the background, through `neo-panel.sh` (logs `var/panel.log`, pid `var/panel.pid`). |
+| `--check` | -- | Print the profile, the interpreter, and whether `rclpy`, `neo_msgs`, `numpy`, `vosk` and `piper` import; start nothing. |
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `NEO_VENV` | `~/neo-venv` | The venv whose site-packages are appended to `PYTHONPATH`. |
+| `NEO_PROFILE` | `hardware` | The profile when `--profile` is not given; what `neo-robot.service` sets. |
+| `NEO_ROS_SETUP` | `/opt/ros/jazzy/setup.bash` | Which ROS install to source. |
+
+### `scripts/pi/neo-panel.sh` -- start the admin panel against the robot
+
+Sources `/etc/profile.d/neo-ros-env.sh`, ROS and the workspace, then runs
+`$NEO_VENV/bin/neo --webapp up`, passing any arguments through. What
+`neo-panel.service` runs. With no ROS workspace present it says so and the
+panel runs its simulated robot.
+
 ### `scripts/pi/sync-to-pi.sh` -- copy this checkout to the robot (run from the laptop)
 
 | Argument | Takes | Meaning |
@@ -367,9 +442,13 @@ Any other flag is rejected with `unknown option: ... (try --help)`.
 
 ## Not built yet
 
-- **The wake word** — which is also the gate speech is missing. Recognition
-  runs today whenever the panel's mic channel is open; `wake_word` is what will
-  own that window on the robot.
+- **A run on the Pi with its USB webcam and microphone.** The graph has been
+  driven end to end under ROS in WSL, and every hardware backend is written to
+  find its device and recover from an unplug, but the webcam-with-mic did not
+  enumerate on the Pi (`lsusb` showed no device) when they were written. That
+  run, and the wake word's false-accept rate in the real foyer, are still owed.
+- **Dialog refinements** (plan Phase 8): the ~6 s follow-up window, a filler
+  line while thinking, short conversation context, and a `launch_testing` suite.
 - **Off-board Whisper**, the ASR accuracy upgrade for when the link is healthy.
   Vosk is the only engine, which is the right default — it is the one that works
   with the laptop closed.
@@ -381,14 +460,6 @@ Any other flag is rejected with `unknown option: ... (try --help)`.
   Not built: fuzzy matching of misheard codes, the unanswered-question log,
   the evaluation set, and the `kb_service` ROS wrapper. There is no campus data
   yet; it is entered on the Data tab.
-- **A real ROS run.** Each `nodes/*.py` now binds real rclpy pub/sub/service
-  I/O against the frozen `neo_msgs` contracts, and `neo_motion`, `neo_perception`,
-  `neo_emotion`, `model_conn` and `intelligence` carry a `setup.py` and
-  `console_scripts` entries so `colcon build --base-paths src` and `ros2 run`
-  can find them (`neo_webapp` still doesn't need either -- the panel is `neo
-  --webapp up`, not a launched node). None of this has run against a live ROS
-  graph yet, only against the existing pure-Python suite; a `colcon build` +
-  `colcon test` on an actual Jazzy machine is what is still owed before it is
-  trusted the way the rest of this table is.
+- **The Logs tab** (plan Phase 10): journal tail and bag recording.
 
 Full-body locomotion is out of scope until asked for.

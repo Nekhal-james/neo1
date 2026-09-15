@@ -4,6 +4,10 @@
 # not started: it cannot run until setup-user.sh has built the venv and
 # `neo --webapp setup` has set the admin password.
 #
+# Through neo-panel.sh rather than `neo --webapp up` directly: the wrapper
+# sources ROS and the robot's DDS settings, without which the panel cannot see
+# the graph and quietly runs its simulated robot instead.
+#
 # @USER@, @REPO@ and @VENV@ are filled in by scripts/pi/setup-system.sh.
 [Unit]
 Description=Neo admin panel
@@ -14,7 +18,8 @@ Wants=network-online.target
 Type=simple
 User=@USER@
 WorkingDirectory=@REPO@
-ExecStart=@VENV@/bin/neo --webapp up
+Environment=NEO_VENV=@VENV@
+ExecStart=/bin/bash @REPO@/scripts/pi/neo-panel.sh
 Restart=on-failure
 RestartSec=5
 

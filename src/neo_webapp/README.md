@@ -127,6 +127,21 @@ returns a fresh one and signs in. Only the code's argon2 hash is stored, as
 | POST | `/api/perception/identify` | yes | "what is this?" — one object-model pass on a live frame |
 | POST | `/api/perception/release` | yes | drop the engagement lock (operator override) |
 | POST | `/api/perception/reset` | yes | clear all tracks and ids — after moving the camera |
+| POST | `/api/robot/wake` | yes | open the robot's listening window, as if it heard "Neo" *(robot only)* |
+| POST | `/api/robot/ask` | yes | `{text}` → into the robot's own turn, answered through its speaker *(robot only)* |
+| POST | `/api/robot/say` | yes | `{text}` → spoken by the robot's `tts` node; no model involved *(robot only)* |
+| POST | `/api/robot/cancel` | yes | stop the robot mid-sentence *(robot only)* |
+| POST | `/api/emotion/gesture` | yes | `{kind}` → `nod`, `shake`, `tilt` or `scan` at gesture priority; refused under e-stop |
+| GET | `/api/camera/snapshot` | yes | the robot camera's latest frame as JPEG; 503 with `Retry-After` until one exists *(robot only)* |
+
+*Robot only* routes check the bridge's `capabilities` (in every state snapshot)
+and answer 501 on the simulated robot. Under the ROS bridge the Vision routes are
+answered by the perception node (`/perception/identify`, `/perception/release`),
+the e-stop goes to `servo_driver`'s `/head/estop` and is reported as unconfirmed
+if nothing answers, and `/ws/mic` audio goes into the graph through the source
+mux rather than to the panel's own recogniser. Start the panel on the robot with
+`scripts/pi/neo-panel.sh`, which keeps ROS sourced; otherwise it cannot import
+rclpy and runs the simulated robot instead.
 
 WebSockets — all authenticated **before** the handshake is accepted, so an
 unauthenticated client never holds a media channel open:
@@ -274,7 +289,9 @@ same rule as the link status and the vision status file.
 
 ## Tabs, and the phase that fills each one
 
-Sources, System, Head, Vision, Dialog, and Audio are live. Data, Emotion, and
-Logs are stubs labelled with the phase that fills them — see plan §2.5. Building
-them this way keeps the panel useful throughout rather than deferring a
-monolithic UI phase to the end.
+Sources, System, Head, Vision, Audio, Dialog, Data and Emotion are live; Logs is
+a stub labelled with the phase that fills it — see plan §2.5. Against the robot,
+the Audio tab adds the wake word's live score and the robot's own conversation,
+the Dialog tab asks the robot aloud, the Vision tab shows the robot camera, and
+the Emotion tab plays gestures. Building tabs this way keeps the panel useful
+throughout rather than deferring a monolithic UI phase to the end.

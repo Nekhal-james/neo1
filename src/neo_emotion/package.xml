@@ -10,6 +10,7 @@
   <exec_depend>rclpy</exec_depend>
   <!-- Required only by the ROS node; the core is pure Python. -->
   <exec_depend>neo_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <!--
     Deliberately does NOT depend on neo_motion. Emotion publishes parameters;
     head_behavior is what blends them into a command. A build dependency here

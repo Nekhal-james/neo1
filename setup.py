@@ -43,6 +43,11 @@ setup(
         "neo_motion.scripts",
         "neo_emotion",
         "neo_emotion.nodes",
+        "neo_audio",
+        "neo_audio.nodes",
+        "neo_audio.scripts",
+        "neo_sources",
+        "neo_sources.nodes",
     ],
     package_dir={
         "model_conn": "src/model-conn/model_conn",
@@ -51,6 +56,8 @@ setup(
         "intelligence": "src/intelligence/intelligence",
         "neo_motion": "src/neo_motion/neo_motion",
         "neo_emotion": "src/neo_emotion/neo_emotion",
+        "neo_audio": "src/neo_audio/neo_audio",
+        "neo_sources": "src/neo_sources/neo_sources",
     },
     package_data={
         "neo_webapp": ["ui/*.html", "ui/*.css", "ui/*.js"],
@@ -81,7 +88,12 @@ setup(
         # only the real YOLO detector backend needs this.
         "detector": ["ultralytics>=8.1", "opencv-python-headless>=4.9", "numpy>=1.24"],
         # intelligence's chat.py works with none of this; only real ASR/TTS need it.
-        "voice": ["vosk>=0.3.44", "piper-tts>=1.2"],
+        #
+        # numpy is here for neo_audio: the wake word runs a Teachable Machine
+        # export as plain array maths, and the endpointer needs RMS over frames.
+        # That is the whole inference stack -- no TensorFlow, no TFJS, nothing
+        # to cross-compile for ARM (see neo_audio/wakeword.py).
+        "voice": ["vosk>=0.3.45", "piper-tts>=1.2", "numpy>=1.24"],
         # neo_motion's PCA9685 backend: plain I2C register writes. Not Adafruit's
         # CircuitPython stack, which cannot be imported on Ubuntu for the Pi
         # without a GPIO library -- see neo_motion/backend.py.
@@ -92,6 +104,7 @@ setup(
             "neo = model_conn.__main__:main",
             "neo-perception-bench = neo_perception.scripts.bench:main",
             "neo-servo-check = neo_motion.scripts.servo_check:main",
+            "neo-audio-check = neo_audio.scripts.audio_check:main",
         ],
     },
     zip_safe=False,

@@ -71,6 +71,7 @@ function render(s) {
 
   renderAudio(s.audio, s.media);
   renderVoice(s.voice);
+  renderRobot(s);
 
   // system
   $('v-cpu').textContent = `${s.system.cpu_percent.toFixed(0)} %`;
@@ -429,8 +430,15 @@ document.querySelectorAll('.seg[data-stream] button').forEach((btn) => {
     post('/api/sources/set', { stream: btn.closest('.seg').dataset.stream, backend: btn.dataset.backend }));
 });
 
-$('btn-estop').addEventListener('click', () =>
-  post('/api/system/estop', { engaged: !(latest && latest.head.estop) }));
+$('btn-estop').addEventListener('click', async () => {
+  const engaged = !(latest && latest.head.estop);
+  const result = await post('/api/system/estop', { engaged });
+  // Loud on purpose. An e-stop the servo driver did not confirm must never
+  // look like one that took effect.
+  if (result && result.ok === false) {
+    alert(`E-stop ${engaged ? 'NOT engaged' : 'not released'}: ${result.message}`);
+  }
+});
 $('btn-center').addEventListener('click', () => post('/api/head/center'));
 $('btn-tone').addEventListener('click', () => post('/api/media/test-tone'));
 $('btn-logout').addEventListener('click', async () => {
@@ -967,6 +975,142 @@ $('btn-ask-voice').addEventListener('click', async () => {
     askBtn.disabled = false;
   }
 });
+
+// ----------------------------------------------------------------- robot
+//
+// The robot's own conversation, camera and gestures. The server says what its
+// bridge can do in `capabilities`; a card for something it cannot do is hidden
+// rather than offering a button that answers 501.
+
+const ROBOT_PHASE = {
+  IDLE: 'idle — waiting to hear its name',
+  LISTENING: 'listening',
+  THINKING: 'thinking…',
+  SPEAKING: 'speaking',
+  DEGRADED: 'idle — no model host, so answers come from campus data',
+  ESTOP: 'stopped (e-stop)',
+};
+const REPLY_SOURCE = {
+  kb: 'campus data, no model',
+  llm: 'language model',
+  kb_polished: 'campus data, model phrasing',
+  fallback: 'nothing could answer',
+};
+
+function can(s, what) {
+  return !!(s && s.capabilities && s.capabilities.includes(what));
+}
+
+function renderRobot(s) {
+  const voice = can(s, 'robot_voice');
+  $('card-robot-voice').hidden = !voice;
+  $('card-robot-dialog').hidden = !voice;
+  $('card-robot-camera').hidden = !can(s, 'robot_camera');
+  document.querySelectorAll('#gesture-buttons button').forEach((b) => {
+    b.disabled = !can(s, 'gestures') || s.head.estop;
+  });
+
+  const e = s.emotion || {};
+  const c = s.conversation || {};
+  $('v-emo-label').textContent = e.label ? e.label.toLowerCase() : '—';
+  $('v-emo-intensity').textContent = typeof e.intensity === 'number' ? e.intensity.toFixed(2) : '—';
+  $('v-emo-gesture').textContent = c.last_gesture || '—';
+  if (!voice) return;
+
+  const w = s.wake || {};
+  if (!w.available) {
+    $('v-wake-state').textContent = 'not running — no scores from the wake word node';
+  } else {
+    let text = `score ${w.score.toFixed(2)}`;
+    if (w.fired) {
+      const how = w.last_threshold ? `${w.last_score.toFixed(2)} ≥ ${w.last_threshold.toFixed(2)}` : 'the Listen button';
+      text += ` · woke ${w.fired}× · last ${fmtDuration(w.last_fired_age_s || 0)} ago, by ${how}`;
+    }
+    $('v-wake-state').textContent = text;
+  }
+  $('v-wake-meter').style.width = `${Math.round((w.available ? w.score : 0) * 100)}%`;
+
+  $('v-robot-phase').textContent = ROBOT_PHASE[s.dialog_state] || s.dialog_state;
+  $('v-robot-heard').textContent = c.partial ? `${c.partial}…` : (c.heard || '—');
+  $('v-robot-reply').textContent = c.reply || '—';
+  $('v-robot-reply2').textContent = c.reply || '—';
+  $('v-robot-source').textContent = c.reply_source
+    ? `${REPLY_SOURCE[c.reply_source] || c.reply_source} · ${c.reply_latency_ms.toFixed(0)} ms`
+    : '—';
+  $('v-robot-turns').textContent = String(c.turns || 0);
+  $('btn-robot-wake').disabled = s.head.estop || s.dialog_state !== 'IDLE' && s.dialog_state !== 'DEGRADED';
+}
+
+async function robotCommand(path, body, outId) {
+  const out = $(outId);
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (res.status === 401) { window.location = '/login'; return false; }
+    const data = await res.json().catch(() => ({}));
+    out.hidden = false;
+    out.className = 'answer ' + (res.ok ? 'good' : 'bad');
+    out.textContent = res.ok ? (data.message || 'done') : (data.detail || `failed (${res.status})`);
+    return res.ok;
+  } catch {
+    out.hidden = false;
+    out.className = 'answer bad';
+    out.textContent = 'could not reach the panel';
+    return false;
+  }
+}
+
+function sendRobotText(inputId, path, outId) {
+  const input = $(inputId);
+  const text = input.value.trim();
+  if (!text) return;
+  robotCommand(path, { text }, outId).then((ok) => { if (ok) input.value = ''; });
+}
+
+$('btn-robot-wake').addEventListener('click', () => robotCommand('/api/robot/wake', {}, 'robot-voice-answer'));
+$('btn-robot-cancel').addEventListener('click', () => robotCommand('/api/robot/cancel', {}, 'robot-voice-answer'));
+$('btn-robot-say').addEventListener('click', () => sendRobotText('robot-say-input', '/api/robot/say', 'robot-voice-answer'));
+$('robot-say-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendRobotText('robot-say-input', '/api/robot/say', 'robot-voice-answer');
+});
+$('btn-robot-ask').addEventListener('click', () => sendRobotText('robot-ask-input', '/api/robot/ask', 'robot-ask-answer'));
+$('robot-ask-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendRobotText('robot-ask-input', '/api/robot/ask', 'robot-ask-answer');
+});
+$('gesture-buttons').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-gesture]');
+  if (!b || b.disabled) return;
+  robotCommand('/api/emotion/gesture', { kind: b.dataset.gesture }, 'gesture-answer');
+});
+
+// The robot camera is polled, not streamed, and only while the Vision tab is
+// the one being looked at: the server only subscribes to raw frames while
+// pictures are being asked for.
+let robotCamUrl = null;
+
+async function pollRobotCamera() {
+  if (!$('tab-vision').classList.contains('active') || $('card-robot-camera').hidden) return;
+  try {
+    const res = await fetch('/api/camera/snapshot', { cache: 'no-store' });
+    if (res.status === 401) { window.location = '/login'; return; }
+    if (res.ok) {
+      const url = URL.createObjectURL(await res.blob());
+      $('robot-camera').src = url;
+      if (robotCamUrl) URL.revokeObjectURL(robotCamUrl);
+      robotCamUrl = url;
+      $('robot-camera-hint').textContent =
+        'Refreshed about twice a second while this tab is open, and not at all otherwise.';
+    } else if (res.status === 503) {
+      $('robot-camera-hint').textContent =
+        'Waiting for a frame — is camera_hw running, and the camera source set to hardware?';
+    }
+  } catch { /* the next tick retries */ }
+}
+
+setInterval(pollRobotCamera, 500);
 
 // ------------------------------------------------------------------ data
 

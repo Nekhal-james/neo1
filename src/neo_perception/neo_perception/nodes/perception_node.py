@@ -12,6 +12,7 @@ the admin panel, which drives the identical pipeline.
 from __future__ import annotations
 
 import logging
+import time
 
 from ..pipeline import AsyncPerception, PerceptionPipeline, PipelineConfig
 from ..types import EngagementState, GestureKind
@@ -47,6 +48,16 @@ _GESTURE_TO_MSG = {
     GestureKind.WAVE: 3,
 }
 
+IDENTIFY_TIMEOUT_S = 4.0
+"""How long /perception/identify waits for the object model before giving up.
+
+Generous on purpose: the object model is a *second* network, loaded lazily on
+the first question, and that first load is seconds on a Pi. Every call after it
+returns in roughly one inference period. Timing out returns an honest failure
+rather than a wrong guess, because the caller is about to say the answer out
+loud.
+"""
+
 
 def probe() -> tuple[bool, str]:
     try:
@@ -67,7 +78,19 @@ class PerceptionNode(Node):
     publish    /perception/detections     vision_msgs/Detection2DArray
                /perception/attention      neo_msgs/AttentionTarget
                /perception/gestures       neo_msgs/GestureEvent
+               /perception/objects        vision_msgs/Detection2DArray
     service    /perception/release        std_srvs/Trigger
+               /perception/identify       std_srvs/Trigger
+
+    `/perception/identify` answers "what is this?" -- one object-model pass over
+    one live frame, ranked so the answer is the thing being *held up* rather
+    than the largest thing in shot. It must never run continuously: that is a
+    second network and roughly doubles per-frame cost on a Pi that has about
+    four frames a second to spend (CLAUDE.md).
+
+    It is a `Trigger` rather than a purpose-built service because `neo_msgs` is
+    a frozen contract and a one-string answer fits `Trigger.message` exactly.
+    The full ranked list goes out on /perception/objects for the panel.
 
     Two things this node must preserve, both already handled by `AsyncPerception`:
 
@@ -89,6 +112,7 @@ class PerceptionNode(Node):
 
         from cv_bridge import CvBridge
         from neo_msgs.msg import AttentionTarget, GestureEvent
+        from rclpy.callback_groups import ReentrantCallbackGroup
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import Image
         from std_srvs.srv import Trigger
@@ -117,7 +141,20 @@ class PerceptionNode(Node):
             AttentionTarget, "/perception/attention", 10
         )
         self._gestures_pub = self.create_publisher(GestureEvent, "/perception/gestures", 10)
+        self._objects_pub = self.create_publisher(
+            Detection2DArray, "/perception/objects", 10
+        )
         self.create_service(Trigger, "/perception/release", self._on_release)
+        # Reentrant: this callback waits on the pipeline's worker thread, and on
+        # the default (mutually exclusive) group that wait would also block the
+        # image subscription -- so the very frame it is waiting for could never
+        # arrive. A deadlock that only shows up with a real camera attached.
+        self.create_service(
+            Trigger,
+            "/perception/identify",
+            self._on_identify,
+            callback_group=ReentrantCallbackGroup(),
+        )
 
         self._timer = self.create_timer(1.0 / PUBLISH_HZ, self._on_timer)
         self.get_logger().info("perception_node: running")
@@ -126,20 +163,97 @@ class PerceptionNode(Node):
         from rclpy.time import Time
 
         try:
-            frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            if msg.encoding == "jpeg":
+                # The browser camera, via the admin panel and the source mux: it
+                # arrives JPEG-encoded, which cv_bridge does not decode.
+                frame = self._decode_jpeg(msg)
+            else:
+                frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         except Exception:  # noqa: BLE001 - a bad frame must not kill the node
             self.get_logger().warning("could not decode /camera/image_raw frame", once=True)
+            return
+        if frame is None:
             return
         stamp = Time.from_msg(msg.header.stamp).nanoseconds / 1e9
         # Never blocks: AsyncPerception replaces a pending frame rather than
         # queuing, so this callback returns immediately either way.
         self.runner.submit(frame, stamp)
 
+    @staticmethod
+    def _decode_jpeg(msg):
+        import cv2
+        import numpy as np
+
+        return cv2.imdecode(np.frombuffer(bytes(msg.data), dtype=np.uint8), cv2.IMREAD_COLOR)
+
     def _on_release(self, request, response):
         self.runner.pipeline.release(reason="operator requested")
         response.success = True
         response.message = "released"
         return response
+
+    def _on_identify(self, request, response):
+        """Run the object model once and answer with the best label.
+
+        Waits on the pipeline's own worker rather than inferring here: doing it
+        on this thread would run a second network on the executor and stall
+        every publisher for its duration.
+        """
+        pipeline = self.runner.pipeline
+        before = pipeline.identify_seq
+        self.runner.request_identify()
+
+        deadline = time.monotonic() + IDENTIFY_TIMEOUT_S
+        while pipeline.identify_seq == before and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        if pipeline.identify_seq == before:
+            response.success = False
+            response.message = (
+                "no frame to identify -- is the camera running?"
+                if self.runner.processed == 0
+                else "object identification timed out"
+            )
+            self.get_logger().warning(f"identify: {response.message}")
+            return response
+
+        if pipeline.last_identify_error:
+            response.success = False
+            response.message = pipeline.last_identify_error
+            return response
+
+        guesses = pipeline.last_identification
+        self._publish_objects(guesses)
+        if not guesses:
+            # A real answer, not a failure: "I cannot tell what that is" is
+            # what the caller should say, and it is true.
+            response.success = True
+            response.message = ""
+            return response
+
+        best = guesses[0]
+        response.success = True
+        response.message = best.label
+        self.get_logger().info(f"identify: {best.label} ({best.confidence:.2f})")
+        return response
+
+    def _publish_objects(self, guesses) -> None:
+        stamp = self.get_clock().now().to_msg()
+        array = self._Detection2DArray()
+        array.header.stamp = stamp
+        for guess in guesses:
+            det = self._Detection2D()
+            det.header.stamp = stamp
+            det.bbox.center.position.x = guess.bbox.cx
+            det.bbox.center.position.y = guess.bbox.cy
+            det.bbox.size_x = guess.bbox.width
+            det.bbox.size_y = guess.bbox.height
+            hyp = self._ObjectHypothesisWithPose()
+            hyp.hypothesis.class_id = guess.label
+            hyp.hypothesis.score = float(guess.confidence)
+            det.results.append(hyp)
+            array.detections.append(det)
+        self._objects_pub.publish(array)
 
     def _on_timer(self) -> None:
         result = self.runner.result
@@ -206,11 +320,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     import rclpy
+    from rclpy.executors import MultiThreadedExecutor
 
     rclpy.init(args=argv)
     node = PerceptionNode()
+    # Multi-threaded so /perception/identify can wait for the object model
+    # without the image subscription -- the source of the frame it is waiting
+    # for -- being blocked behind it.
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

@@ -333,6 +333,49 @@ class PerceptionView:
 
 
 @dataclass
+class WakeView:
+    """The robot's wake word: its live score, and what it last did.
+
+    Not a mirror of neo_msgs/WakeEvent, deliberately: that is a one-shot event,
+    and this is the panel's running view of the detector, so it carries a live
+    score and a count the event has no place for.
+    """
+
+    # The detector is publishing scores. False also when it has gone quiet,
+    # which is the only way the panel can tell "not listening" from "silence".
+    available: bool = False
+    score: float = 0.0
+    fired: int = 0
+    last_score: float = 0.0
+    # The threshold the last firing was judged against. 0.0 means an operator
+    # opened the window from the panel; no threshold was applied.
+    last_threshold: float = 0.0
+    last_person_present: bool = False
+    last_fired_age_s: float | None = None
+
+
+@dataclass
+class ConversationView:
+    """The robot's own spoken turns, as its nodes report them.
+
+    Separate from `voice` and `audio`, which describe the panel's in-process
+    voice loop. On the robot the wake word, asr_router, dialog and tts nodes run
+    the conversation, and the panel only observes and steers it.
+    """
+
+    heard: str = ""
+    partial: str = ""
+    reply: str = ""
+    # kb | llm | kb_polished | fallback -- neo_msgs/Reply.source.
+    reply_source: str = ""
+    reply_latency_ms: float = 0.0
+    turns: int = 0
+    speaking: bool = False
+    # The last head gesture the emotion layer or an operator asked for.
+    last_gesture: str = ""
+
+
+@dataclass
 class RobotState:
     backend: str = "mock"
     dialog_state: str = "IDLE"
@@ -345,7 +388,13 @@ class RobotState:
     perception: PerceptionView = field(default_factory=PerceptionView)
     audio: AudioView = field(default_factory=AudioView)
     voice: VoiceView = field(default_factory=VoiceView)
+    wake: WakeView = field(default_factory=WakeView)
+    conversation: ConversationView = field(default_factory=ConversationView)
     nodes: list[NodeStatus] = field(default_factory=list)
+    # What this bridge can do beyond the Bridge interface -- "robot_voice",
+    # "robot_camera", "gestures", "perception" -- so the UI hides a control
+    # instead of offering a button that answers 501.
+    capabilities: list[str] = field(default_factory=list)
     # Rolling counters, useful for confirming a stream is actually flowing.
     camera_fps_in: float = 0.0
     mic_kbps_in: float = 0.0
