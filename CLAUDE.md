@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Ten packages under `src/` (1,032 tests). Eight are Python: `neo_webapp`
+Ten packages under `src/` (1,033 tests). Eight are Python: `neo_webapp`
 (admin panel), `neo_perception` (detection/gestures/engagement and the USB
 camera node), `neo_motion` (head arbiter and servo driver), `neo_emotion` (mood
 and the motion it shapes), `neo_audio` (mic, speaker, wake word, ASR router,
@@ -118,9 +118,13 @@ two quiet ways:
 
 * ROS launches nodes under the *system* interpreter, which cannot see the
   venv. vosk, piper and the repo itself live there, so `wake_word`, `asr_router`
-  and `tts` die with a "not installed" that is untrue. `neo-up.sh` **appends** the
-  venv's site-packages to `PYTHONPATH` -- appends, so ROS keeps the numpy its C
-  extensions were built against. Never activate the venv for this.
+  and `tts` die with a "not installed" that is untrue. `neo-up.sh` puts the
+  venv's site-packages on `PYTHONPATH` **after `/usr/lib/python3/dist-packages`**.
+  Merely appending the venv after ROS is not enough: every `PYTHONPATH` entry
+  is searched before dist-packages, so the venv's numpy 2.x shadowed the
+  system's 1.26 and `cv_bridge` (built against 1.x) warned "may crash" inside
+  `perception_node` on the Pi. `neo-up.sh --check` prints the numpy version it
+  resolves to. Never activate the venv for this.
 * The panel needs ROS sourced, or `make_bridge("auto")` cannot import rclpy and
   silently runs the **simulated** robot. `scripts/pi/neo-panel.sh` sources ROS
   and `/etc/profile.d/neo-ros-env.sh` (domain 42, CycloneDDS), which systemd

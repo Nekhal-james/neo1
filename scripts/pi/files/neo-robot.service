@@ -25,6 +25,10 @@ ExecStart=/bin/bash @REPO@/scripts/pi/neo-up.sh
 # cleanly on it, and servo_driver's shutdown stops the servos rather than
 # leaving the last pulse running -- which a SIGKILL would.
 KillSignal=SIGINT
+# Only ros2 launch gets the SIGINT; it forwards one to each node itself.
+# Signalling the whole control group as well hands every node a second SIGINT
+# mid-shutdown. After TimeoutStopSec, anything still running is killed.
+KillMode=mixed
 TimeoutStopSec=20
 Restart=on-failure
 RestartSec=5

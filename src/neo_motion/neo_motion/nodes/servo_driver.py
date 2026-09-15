@@ -185,11 +185,21 @@ def main(argv: list[str] | None = None) -> int:
 
     rclpy.init(args=argv)
     node = ServoDriverNode()
+    import signal
+
+    from rclpy.executors import ExternalShutdownException
+
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # This node's cleanup is the one that stops the servos, so it must run
+        # to the end. ctrl-C and `timeout` signal the whole process group and
+        # ros2 launch forwards its own SIGINT on top; on the Pi the second one
+        # landed inside destroy_node() and aborted it. A continuous-rotation
+        # servo whose shutdown is aborted keeps turning on its last pulse.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

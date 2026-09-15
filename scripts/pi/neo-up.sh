@@ -18,10 +18,10 @@
 #      where that interpreter was looking.
 #   3. No conda. Its markers make ROS's own Python discovery prefer it.
 #
-# The fix for (2) is to APPEND the venv's site-packages to PYTHONPATH rather
-# than prepend. ROS's numpy and yaml keep priority -- they are the versions its
-# own C extensions were built against -- and the venv only fills in what the
-# system interpreter genuinely does not have.
+# The fix for (2) is to put the venv's site-packages on PYTHONPATH *after* the
+# system's dist-packages. Appending it after ROS alone is not enough: every
+# PYTHONPATH entry is searched before dist-packages, so the venv's numpy would
+# still shadow the one ROS's C extensions (cv_bridge) were built against.
 
 set -euo pipefail
 
@@ -73,8 +73,22 @@ if [ -x "$VENV/bin/python" ]; then
   # Ask the venv where its packages are rather than assuming python3.12: the
   # path changes with the interpreter, and a wrong guess here is silent.
   SITE="$("$VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-  export PYTHONPATH="${PYTHONPATH:-}:$SITE"
-  say "venv packages: $SITE (appended, so ROS keeps its own numpy)"
+  # The system's dist-packages go in *before* the venv. With the venv merely
+  # appended, its numpy 2.x still won the import over the system's 1.26, and
+  # cv_bridge -- built against numpy 1.x -- printed "may crash" inside
+  # perception_node on the Pi (measured). In this order ROS gets the numpy and
+  # OpenCV it was built for, and the venv supplies only what the system lacks:
+  # vosk, piper, onnxruntime, ultralytics, torch and this repo. Each was run on
+  # the Pi in this order: a cv_bridge round trip, Piper synthesis, a Vosk
+  # session and a YOLO inference.
+  DIST=/usr/lib/python3/dist-packages
+  if [ -d "$DIST" ]; then
+    export PYTHONPATH="${PYTHONPATH:-}:$DIST:$SITE"
+    say "python path: ROS, then $DIST, then $SITE"
+  else
+    export PYTHONPATH="${PYTHONPATH:-}:$SITE"
+    say "python path: ROS, then $SITE"
+  fi
 else
   say "no venv at $VENV -- the wake word and voice will be unavailable"
 fi
@@ -85,13 +99,20 @@ cd "$REPO_DIR"
 if [ "$CHECK_ONLY" = 1 ]; then
   say "profile:  $PROFILE"
   say "python:   $(command -v python3)"
-  for module in rclpy neo_msgs numpy vosk piper; do
+  for module in rclpy neo_msgs cv_bridge numpy vosk piper; do
     if python3 -c "import $module" 2>/dev/null; then
       printf '    %-10s ok\n' "$module"
     else
       printf '    %-10s MISSING\n' "$module"
     fi
   done
+  # cv_bridge imports "fine" under the wrong numpy and fails later, so the
+  # version is the thing to look at, not the import.
+  np_version="$(python3 -c 'import numpy; print(numpy.__version__)' 2>/dev/null || true)"
+  say "numpy:    ${np_version:-not importable}"
+  case "$np_version" in
+    2.*) echo "    WARNING: ROS's cv_bridge is built against numpy 1.x; perception will misbehave" ;;
+  esac
   say "would run: ros2 launch neo_bringup neo.launch.py profile:=$PROFILE"
   [ "$WITH_PANEL" = 1 ] && say "would run: scripts/pi/neo-panel.sh (in the background)"
   exit 0

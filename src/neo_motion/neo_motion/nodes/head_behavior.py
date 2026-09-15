@@ -411,11 +411,20 @@ def main(argv: list[str] | None = None) -> int:
 
     rclpy.init(args=argv)
     node = HeadBehaviorNode()
+    import signal
+
+    from rclpy.executors import ExternalShutdownException
+
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # ctrl-C and `timeout` signal the whole process group, and ros2 launch
+        # forwards its own SIGINT on top. The second one landed inside
+        # destroy_node() and cut the shutdown short -- measured on the Pi. There
+        # is nothing left to interrupt by now, so finish cleaning up instead.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

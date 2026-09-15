@@ -35,7 +35,7 @@ All of them run with no Pi, no ROS, and no servos attached — `neo_webapp` via 
 mock servo backend, `neo_perception` against any camera the panel is using,
 `model_conn`/`intelligence` against whatever endpoints you point them at.
 
-1,032 tests. Run each package from inside its own directory
+1,033 tests. Run each package from inside its own directory
 (`cd src/neo_webapp && python -m pytest -q`) — the per-package `tests/conftest.py`
 files collide if you point pytest at `src/` as a whole. `neo_msgs` and
 `neo_bringup` are tested the same way with plain pytest: their tests read the
@@ -414,11 +414,11 @@ Any other flag is rejected with `unknown option: ... (try --help)`.
 |---|---|---|
 | `--profile` | `NAME` (default `hardware`, or `$NEO_PROFILE`) | Which `neo_bringup` profile to launch: `dev`, `hardware`, `hybrid`, `bench`. |
 | `--panel` | -- | Also start the admin panel in the background, through `neo-panel.sh` (logs `var/panel.log`, pid `var/panel.pid`). |
-| `--check` | -- | Print the profile, the interpreter, and whether `rclpy`, `neo_msgs`, `numpy`, `vosk` and `piper` import; start nothing. |
+| `--check` | -- | Print the profile, the interpreter, whether `rclpy`, `neo_msgs`, `cv_bridge`, `numpy`, `vosk` and `piper` import, and the numpy version ROS will get (it must be the system's 1.x, or `cv_bridge` misbehaves); start nothing. |
 
 | Environment variable | Default | Meaning |
 |---|---|---|
-| `NEO_VENV` | `~/neo-venv` | The venv whose site-packages are appended to `PYTHONPATH`. |
+| `NEO_VENV` | `~/neo-venv` | The venv whose site-packages go on `PYTHONPATH`, after the system's dist-packages so ROS keeps the numpy `cv_bridge` was built against. |
 | `NEO_PROFILE` | `hardware` | The profile when `--profile` is not given; what `neo-robot.service` sets. |
 | `NEO_ROS_SETUP` | `/opt/ros/jazzy/setup.bash` | Which ROS install to source. |
 

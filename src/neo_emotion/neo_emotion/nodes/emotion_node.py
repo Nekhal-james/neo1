@@ -227,11 +227,18 @@ def main(argv: list[str] | None = None) -> int:
 
     rclpy.init(args=argv)
     node = EmotionNode()
+    import signal
+
+    from rclpy.executors import ExternalShutdownException
+
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # A second SIGINT (the process group's, then launch's) must not cut the
+        # shutdown short; see neo_motion/nodes/head_behavior.py.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

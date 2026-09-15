@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import replace
 
 from ..config import Config
 from ..devices import MicCapture, SpeakerPlayback, capture_devices, playback_devices
@@ -58,7 +59,11 @@ def _report_wakeword(config: Config) -> bool:
         print("      Teachable Machine export (.zip). It does not need unpacking.")
         return False
 
-    ok, why = availability(config.wakeword)
+    # The configured path is relative to the repo root, not to wherever this
+    # happens to run from -- setup-user.sh runs it from the user's home, where
+    # the unresolved path reported a model that was sitting right there as
+    # "not found".
+    ok, why = availability(replace(config.wakeword, model_path=str(path)))
     if not ok:
         print(f"Wake word: FAIL  {why}")
         return False

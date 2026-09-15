@@ -105,11 +105,18 @@ def main(argv: list[str] | None = None) -> int:
     ros_node.get_logger().info(
         f"link_node: probing every {cfg.receiver.probe_interval_s:.1f}s"
     )
+    import signal
+
+    from rclpy.executors import ExternalShutdownException
+
     try:
         rclpy.spin(ros_node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # A second SIGINT (the process group's, then launch's) must not cut the
+        # shutdown short; see neo_motion/nodes/servo_driver.py.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         ros_node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
