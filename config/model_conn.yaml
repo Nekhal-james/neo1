@@ -6,6 +6,7 @@
 host:
   # Serving role (`neo --model ... up`) runs on the laptop.
   default_model_path: ""      # e.g. /home/you/models/qwen2.5-3b-instruct-q4_k_m.gguf -- set this in model_conn.local.yaml, not here
+                               # if empty, auto-discovers a single .gguf in the models/ folder
   ollama_port: 11434          # public port -- the mTLS proxy binds here when tls.enabled; Ollama binds here directly otherwise
   bind_host: 0.0.0.0
   idle_unload_minutes: 30     # plan section 0.3.3's "idle unload" requirement

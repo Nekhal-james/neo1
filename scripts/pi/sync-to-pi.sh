@@ -27,7 +27,7 @@ if [ "${1:-}" = "--dry-run" ]; then
   DRY_RUN=1
   shift
 fi
-TARGET="${1:-neo@neo-pi.local}"
+TARGET="${1:-neo@10.220.142.170}"
 KEY="${NEO_SSH_KEY:-$HOME/.ssh/id_ed25519_neo}"
 REMOTE_DIR="${NEO_REMOTE_DIR:-neo1}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

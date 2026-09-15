@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from . import tls
-from .config import Config
+from .config import Config, discover_model
 from .status_store import HOST_HEARTBEAT_S, write_host_status
 
 log = logging.getLogger("model_conn.ollama")
@@ -133,9 +133,12 @@ def up(cfg: Config, model_override: str | None) -> int:
 
     model = model_override or cfg.host.default_model_path
     if not model:
+        model = discover_model()
+    if not model:
         print(
             "[model-conn] no model path given and none configured "
-            "(pass --model or set host.default_model_path in config/model_conn.yaml)"
+            "(pass --model, set host.default_model_path in config, "
+            "or place a .gguf file in models/)"
         )
         return 1
 

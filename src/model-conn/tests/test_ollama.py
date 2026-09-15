@@ -185,6 +185,7 @@ def test_up_reports_clear_error_when_no_model_given(monkeypatch, capsys):
     from model_conn.config import Config
 
     monkeypatch.setattr(ollama, "is_ollama_installed", lambda: True)
+    monkeypatch.setattr(ollama, "discover_model", lambda: "")
     rc = ollama.up(Config(), model_override=None)
     assert rc == 1
     assert "no model path given" in capsys.readouterr().out

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from model_conn.config import Config
+from model_conn.config import Config, discover_model, MODELS_DIR
 
 
 def test_defaults_with_no_files(tmp_path: Path):
@@ -60,3 +60,34 @@ def test_status_path_resolves_relative_to_repo_root(tmp_path: Path):
     cfg = Config.load(tmp_path / "nonexistent.yaml")
     assert cfg.status_path.is_absolute()
     assert cfg.status_path.name == "status.json"
+
+
+def test_discover_model_single_gguf(monkeypatch, tmp_path):
+    gguf = tmp_path / "some-model.gguf"
+    gguf.write_bytes(b"fake")
+    monkeypatch.setattr("model_conn.config.MODELS_DIR", tmp_path)
+    assert discover_model() == str(gguf)
+
+
+def test_discover_model_no_gguf(monkeypatch, tmp_path):
+    monkeypatch.setattr("model_conn.config.MODELS_DIR", tmp_path)
+    assert discover_model() == ""
+
+
+def test_discover_model_nonexistent_dir(monkeypatch):
+    monkeypatch.setattr(
+        "model_conn.config.MODELS_DIR", Path("/nonexistent/models")
+    )
+    assert discover_model() == ""
+
+
+def test_discover_model_multiple_ggufs(monkeypatch, tmp_path):
+    (tmp_path / "a.gguf").write_bytes(b"a")
+    (tmp_path / "b.gguf").write_bytes(b"b")
+    monkeypatch.setattr("model_conn.config.MODELS_DIR", tmp_path)
+    try:
+        discover_model()
+    except SystemExit as exc:
+        assert "multiple .gguf models" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit for ambiguous models")

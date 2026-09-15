@@ -18,6 +18,8 @@ import yaml
 # repo root: .../neo1/src/model-conn/model_conn/config.py -> up 3
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_DIR = REPO_ROOT / "config"
+MODELS_DIR = REPO_ROOT / "models"
+MODELS_DIR = REPO_ROOT / "models"
 DEFAULT_CONFIG = CONFIG_DIR / "model_conn.yaml"
 LOCAL_CONFIG = CONFIG_DIR / "model_conn.local.yaml"
 
@@ -199,6 +201,26 @@ def _config_path(explicit: str | Path | None) -> Path | None:
     if DEFAULT_CONFIG.exists():
         return DEFAULT_CONFIG
     return None
+
+
+def discover_model() -> str:
+    """Find a single .gguf in models/ when no explicit path is given.
+
+    Returns the absolute path to the .gguf if exactly one is found, or "" if
+    none are found.  Raises SystemExit if multiple are found (ambiguous).
+    """
+    if not MODELS_DIR.is_dir():
+        return ""
+    ggufs = sorted(MODELS_DIR.glob("*.gguf"))
+    if len(ggufs) == 0:
+        return ""
+    if len(ggufs) > 1:
+        names = [g.name for g in ggufs]
+        raise SystemExit(
+            f"multiple .gguf models found in {MODELS_DIR}: {', '.join(names)} -- "
+            "pass --model to choose one"
+        )
+    return str(ggufs[0])
 
 
 def _resolve(p: str | Path) -> Path:

@@ -327,6 +327,12 @@ def _cmd_vision_status() -> int:
 
 def _cmd_prompt(text: str, cfg: Config) -> int:
     """Ask the assistant directly -- the test path for `neo --prompt`."""
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(name)s] %(levelname)s: %(message)s",
+    )
     try:
         from intelligence.cli import run_prompt
     except ImportError as exc:
