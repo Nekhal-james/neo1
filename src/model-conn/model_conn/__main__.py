@@ -74,7 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="neo", description="Model connection CLI (host + receiver)."
     )
-    p.add_argument("--model", metavar="PATH", help="path to a .gguf model (host role, with 'up')")
+    p.add_argument(
+        "--model",
+        nargs="?",
+        const=None,
+        metavar="PATH",
+        help="path to a .gguf model (host role, with 'up'); optional -- "
+        "auto-discovers models/*.gguf when omitted",
+    )
     p.add_argument(
         "--connection:status",
         dest="connection_status",
@@ -373,6 +380,12 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # `--model` is optional, so `neo --model up` parses `up` as its value --
+    # but `up` is the only subcommand, never a valid model. Shift it back so
+    # bare `neo --model up` and `neo up` mean the same thing (auto-discover).
+    if args.model == "up" and args.command is None:
+        args.model, args.command = None, "up"
 
     modes = {
         "prompt": args.prompt is not None,
