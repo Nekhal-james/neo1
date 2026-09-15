@@ -107,9 +107,14 @@ Horns off, both servos connected. Calibrate pan (channel 0) first, then tilt
 stops; `--keep` is refused with anything but neutral, because the servo would
 keep turning.
 
+The robot uses **fixed-speed** mode: three pulses per axis, each measured
+directly (`motion.local.yaml` documented above). Mark each shaft with a pen so
+you can count turns.
+
 1. **Signal check.** `~/neo-venv/bin/neo-servo-check --pulse 0 1600` should make
    pan turn slowly one way for two seconds, then stop. If it does not turn at
-   all, fix the wiring before anything else.
+   all, fix the wiring before anything else. Note which way 1600 turns -- that
+   is the *above* side.
 
 2. **Neutral.** Find the pulse where it does not turn at all:
 
@@ -117,55 +122,40 @@ keep turning.
    ~/neo-venv/bin/neo-servo-check --pulse 0 1500 --hold 5
    ```
 
-   If it creeps, try 1490, 1510, then smaller steps, until it stays completely
-   still.
-
-3. **Stop band.** From a pulse where it stays still, halve the distance to a
-   pulse that turns it, both ways, until each edge is known to about 10 µs.
-   `neutral_us` is the middle of the band of still pulses and `deadband_us` half
-   its width. Pan: still from 1400 to 1505, turning at 1375 and 1510, so the band
-   is about 1387-1507, `neutral_us` 1447 and `deadband_us` 60.
-
-4. **Speed, both directions.** Mark the shaft with a pen, then run it for 20
-   seconds at 150 µs above neutral, then 150 µs below, counting full turns (to
-   the nearest quarter) each time:
+   If it creeps, try 1510, 1490, then smaller steps, until it stays completely
+   still. Expect a brief jolt when the pulse is applied; that is normal. When
+   found:
 
    ```bash
-   ~/neo-venv/bin/neo-servo-check --pulse 0 1597 --hold 20    # neutral 1447 + 150
-   ~/neo-venv/bin/neo-servo-check --pulse 0 1297 --hold 20    # neutral 1447 - 150
+   ~/neo-venv/bin/neo-servo-check --record-neutral pan 1500
    ```
 
-   `speed_offset_us` is 150; `speed_deg_s` is the turns above neutral × 360 ÷ 20,
-   and `speed_below_deg_s` the turns below × 360 ÷ 20. **Measure both**: pan
-   turned 3.25 times one way and 4.5 times the other, 38 % apart. With one speed
-   for both, the estimate would move about 10° per back-and-forth.
+3. **Speed above.** Pick a pulse ~150 µs above neutral that turns clearly
+   (1600 turned anticlockwise here), run it for 40 s and count full turns:
 
-5. **Write it down** in `config/motion.local.yaml` on the Pi (never copied or
-   overwritten by the laptop's sync): the four required numbers per servo, plus
-   `speed_below_deg_s` when the two directions differ. Pan's are its real
-   measurements; tilt's come from the same steps on channel 1:
-
-   ```yaml
-   pan:
-     neutral_us: 1447
-     deadband_us: 60
-     speed_offset_us: 150
-     speed_deg_s: 58.5
-     speed_below_deg_s: 81
-     min_deg: -60        # optional: how far the estimated angle may go; +/-30 if left out
-     max_deg: 60
-   tilt:
-     neutral_us: ...     # measured on channel 1, as above
-     deadband_us: ...
-     speed_offset_us: 150
-     speed_deg_s: ...
-     speed_below_deg_s: ...
+   ```bash
+   ~/neo-venv/bin/neo-servo-check --pulse 0 1650 --hold 40
+   ~/neo-venv/bin/neo-servo-check --record-speed pan 1650 --turns 26.5 --seconds 40
    ```
 
-   Then `~/neo-venv/bin/neo-servo-check` should show both as "calibrated". If a
-   servo turns the wrong way for its axis, add `inverted: true` rather than
-   changing numbers. Anything missing or misspelt is refused, with every problem
-   listed, rather than half-applied.
+   `--record-speed` computes turns × 360 ÷ seconds and writes `above_us` and
+   `above_deg_s`. Re-run the hold-40 and recount if the first count is
+   uncertain; this number becomes the estimate's speed, and both directions
+   need real measurements -- pan turned 238.5 °/s one way and 216 °/s the
+   other, and one averaged speed would walk the estimate about 2° per 20°
+   out-and-back.
+
+4. **Speed below.** Same with a pulse below neutral, reversing the pen count:
+
+   ```bash
+   ~/neo-venv/bin/neo-servo-check --pulse 0 1350 --hold 40
+   ~/neo-venv/bin/neo-servo-check --record-speed pan 1350 --turns 24 --seconds 40
+   ```
+
+5. Repeat steps 1–4 for tilt (channel 1). Then `~/neo-venv/bin/neo-servo-check`
+   should show both as "calibrated". If a servo turns the wrong way for its
+   axis, add `inverted: true` rather than changing numbers. Anything missing or
+   misspelt is refused, with every problem listed, rather than half-applied.
 
 6. **First real move.** With both calibrated, drive the head through the actual
    motion driver, the same code the robot uses, out to an angle and back:
@@ -209,7 +199,7 @@ pin 3, SCL to pin 5, GND to pin 6).
 
 ### Calibration (measured on the robot)
 
-| Servo | Signal | Neutral | Stop band | Speed above / below neutral | Angle limits | Inverted |
-|---|---|---|---|---|---|---|
-| pan (MG995 360°) | GPIO18, pin 12 | 1447 µs | 1387–1507 µs (±60) | 58.5 °/s counter-clockwise / 81 °/s clockwise, at ±150 µs | ±30° (default) | not yet decided (head not mounted) |
-| tilt (MG995 360°) | GPIO19, pin 35 | 1488 µs | 1450–1525 µs (±38) | 108 °/s both ways at ±400 µs (36 °/s at ±150, same both ways) | ±30° (default) | not yet decided (head not mounted) |
+| Servo | Signal | Neutral | Speed above / below neutral | Angle limits | Inverted |
+|---|---|---|---|---|---|
+| pan (MG995 360°) | GPIO18, pin 12 | 1500 µs | 238.5 °/s anticlockwise at 1650 µs / 216 °/s clockwise at 1350 µs | ±30° (default) | not yet decided (head not mounted) |
+| tilt (MG995 360°) | GPIO19, pin 35 | 1447 µs | 180 °/s anticlockwise at 1600 µs / 243 °/s clockwise at 1300 µs | ±30° (default) | not yet decided (head not mounted) |

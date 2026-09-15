@@ -66,14 +66,46 @@ def test_ensure_model_gguf_path_runs_create(tmp_path: Path, monkeypatch):
     model.write_bytes(b"fake weights")
 
     calls = []
-    monkeypatch.setattr(
-        ollama.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or None
-    )
+    captured_env = {}
 
-    name = ollama.ensure_model(str(model), port=11434)
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        captured_env.update(kw.get("env", {}))
+        if cmd[:2] == ["ollama", "list"]:
+            class Result:
+                stdout = ""
+
+            return Result()
+        return None
+
+    monkeypatch.setattr(ollama.subprocess, "run", fake_run)
+
+    name = ollama.ensure_model(str(model), port=11435)
     assert name == "qwen2.5-3b"
-    assert calls[0][:2] == ["ollama", "create"]
-    assert calls[0][2] == "qwen2.5-3b"
+    assert any(c[:3] == ["ollama", "create", "qwen2.5-3b"] for c in calls)
+    assert captured_env["OLLAMA_HOST"] == "127.0.0.1:11435"
+
+
+def test_ensure_model_reuses_already_registered_gguf(tmp_path: Path, monkeypatch):
+    model = tmp_path / "qwen2.5-3b.gguf"
+    model.write_bytes(b"fake weights")
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[:2] == ["ollama", "list"]:
+            class Result:
+                stdout = "qwen2.5-3b:latest\n"
+
+            return Result()
+        return None
+
+    monkeypatch.setattr(ollama.subprocess, "run", fake_run)
+
+    name = ollama.ensure_model(str(model), port=11435)
+    assert name == "qwen2.5-3b"
+    assert all(c[:2] != ["ollama", "create"] for c in calls)
 
 
 def test_ensure_model_missing_gguf_raises(tmp_path: Path):

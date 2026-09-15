@@ -569,6 +569,43 @@ async def audio_reload(request: Request, user: str = Depends(require_session)) -
     return asdict(speech.view(listening=request.app.state.media.active("mic")))
 
 
+# -- wake word ---------------------------------------------------------------
+
+
+@router.get("/api/wake/status")
+async def wake_status(request: Request, user: str = Depends(require_session)) -> dict:
+    """Whether the wake word can run, live score, and what it last did.
+
+    `available` here means the detector is hearing audio right now (the mic
+    channel is open and feeding it), not merely that a model exists -- so the
+    Audio tab can tell "not listening" from "silence". The model's health lives
+    alongside as `reason`: "" when it should run, otherwise exactly what to fix.
+    """
+    wake = request.app.state.wake
+    await asyncio.to_thread(wake.refresh_availability)
+    return asdict(wake.view())
+
+
+@router.post("/api/wake/listen")
+async def wake_listen(request: Request, user: str = Depends(require_session)) -> dict:
+    """Open the listening window as if the word had been heard.
+
+    The simulated robot's push-to-talk, the same idea as `/api/robot/wake` on
+    the ROS bridge: the fire carries a threshold of 0, so a turn started this
+    way can never be mistaken for the detector having accepted something.
+    """
+    wake = request.app.state.wake
+    wake.manual_wake()
+    return asdict(wake.view())
+
+
+@router.post("/api/wake/reset")
+async def wake_reset(request: Request, user: str = Depends(require_session)) -> dict:
+    """Clear fires and the detector's buffer; keep the loaded model."""
+    request.app.state.wake.reset()
+    return {"ok": True}
+
+
 # -- voice (the spoken conversation loop) -----------------------------------
 
 

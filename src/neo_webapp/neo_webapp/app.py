@@ -21,6 +21,7 @@ from .media import MediaManager, media_router
 from .perception_link import PerceptionLink
 from .speech import SpeechLink
 from .voice import VoiceLoop
+from .wake import WakeLink
 
 try:
     from neo_perception.status_store import write_status as write_vision_status
@@ -55,6 +56,10 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
         1 Hz task rather than in `snapshot()` -- same rule as the link status
         above. The live parts (partial text, last transcript) are in memory and
         are read straight out of SpeechLink at 4 Hz.
+
+        The wake word view is refreshed here too: its availability stats the
+        model path (file I/O), and its live score is fed per-chunk on the mic
+        channel, so the 4 Hz broadcast already carries the moving part.
         """
         speech: SpeechLink = app.state.speech
         speech.refresh_availability()
@@ -65,6 +70,10 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
         # the badge underneath it; re-publishing here puts it back within a
         # second rather than at the next turn.
         app.state.voice.publish()
+
+        wake: WakeLink = app.state.wake
+        wake.refresh_availability()
+        app.state.bridge.snapshot().wake = wake.view()
 
     async def publish_vision_status(app: FastAPI) -> None:
         """Mirror what the camera sees into var/perception/status.json, and keep
@@ -150,6 +159,7 @@ def create_app(config: Config | None = None, bridge: Bridge | None = None) -> Fa
         mic_rate=cfg.media.mic_sample_rate,
         speaker_rate=cfg.media.speaker_sample_rate,
     )
+    app.state.wake = WakeLink(mic_rate=cfg.media.mic_sample_rate)
     app.state.voice = VoiceLoop(app.state)
 
     app.include_router(api_router)

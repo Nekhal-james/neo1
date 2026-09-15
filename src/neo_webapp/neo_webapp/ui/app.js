@@ -72,6 +72,7 @@ function render(s) {
   renderAudio(s.audio, s.media);
   renderVoice(s.voice);
   renderRobot(s);
+  renderWake(s);
 
   // system
   $('v-cpu').textContent = `${s.system.cpu_percent.toFixed(0)} %`;
@@ -797,6 +798,39 @@ function showReason(id, ok, reason) {
   el.textContent = reason;
 }
 
+function renderWake(s) {
+  // On the real robot the wake card belongs to the robot voice card, rendered
+  // in renderRobot. This section is the *simulated* robot's: the same detector,
+  // run in-process against the browser mic, so the threshold can be tuned with
+  // no hardware at all.
+  if (can(s, 'robot_voice')) return;
+  const w = s.wake || {};
+  if (!w.available && !w.reason) {
+    // Nothing configured and nothing hearing: no wake card in the way.
+    $('wake-sim-section').hidden = true;
+    return;
+  }
+  $('wake-sim-section').hidden = false;
+  if (!w.available) {
+    $('v-wake-sim-status').textContent = 'not running';
+    $('v-wake-sim-meter').style.width = '0%';
+    $('v-wake-sim-score').textContent = '—';
+    $('v-wake-sim-fires').textContent = String(w.fired || 0);
+    showReason('wake-sim-warning', false, w.reason);
+    return;
+  }
+  showReason('wake-sim-warning', true, w.reason);
+  let text = `listening — score ${w.score.toFixed(2)}`;
+  if (w.fired) {
+    const how = w.last_threshold ? `${w.last_score.toFixed(2)} ≥ ${w.last_threshold.toFixed(2)}` : 'the Listen button';
+    text += ` · woke ${w.fired}× · last ${fmtDuration(w.last_fired_age_s || 0)} ago, by ${how}`;
+  }
+  $('v-wake-sim-status').textContent = text;
+  $('v-wake-sim-meter').style.width = `${Math.round(Math.min(1, Math.max(0, w.score)) * 100)}%`;
+  $('v-wake-sim-score').textContent = w.score.toFixed(3);
+  $('v-wake-sim-fires').textContent = String(w.fired || 0);
+}
+
 const sayInput = $('say-input');
 const sayBtn = $('btn-say');
 
@@ -848,6 +882,15 @@ $('btn-say-heard').addEventListener('click', () => {
 });
 
 $('btn-asr-reset').addEventListener('click', () => post('/api/audio/reset'));
+$('btn-wake-sim-listen').addEventListener('click', async () => {
+  const view = await post('/api/wake/listen');
+  if (view) renderWake({ ...latest, wake: view });
+});
+$('btn-wake-sim-reset').addEventListener('click', async () => {
+  await post('/api/wake/reset');
+  const res = await fetch('/api/wake/status');
+  if (res.ok) renderWake({ ...latest, wake: await res.json() });
+});
 $('btn-audio-reload').addEventListener('click', async () => {
   const btn = $('btn-audio-reload');
   btn.disabled = true;

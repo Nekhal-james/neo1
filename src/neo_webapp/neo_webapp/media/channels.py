@@ -139,6 +139,7 @@ async def ws_mic(websocket: WebSocket) -> None:
     bridge, media = _ctx(websocket)
     speech = websocket.app.state.speech
     voice = getattr(websocket.app.state, "voice", None)
+    wake = getattr(websocket.app.state, "wake", None)
     await media.open("mic")
     if voice is not None:
         voice.publish()
@@ -149,12 +150,19 @@ async def ws_mic(websocket: WebSocket) -> None:
             if getattr(bridge, "owns_recognition", False):
                 # On the robot, this audio goes into the graph, where the wake
                 # word and asr_router already listen to it. A second recogniser
-                # here would transcribe everything twice, on the same Pi.
+                # (or wake word) here would run both twice, on the same Pi.
                 continue
             # Half-duplex (plan 5.6): while Neo's own voice is playing, the room
             # mic is hearing it. The meter above still gets the audio -- the mic
             # is fine -- but the recognizer must not, or Neo transcribes its own
-            # reply and answers itself.
+            # reply and answers itself. The wake word sits upstream of the same
+            # gate: it must never wake itself either.
+            if wake is not None and not (voice is not None and voice.gated()):
+                person_present = getattr(
+                    websocket.app.state.bridge.snapshot().perception, "person_count", 0
+                ) > 0
+                wake.feed(chunk, person_present=person_present)
+                websocket.app.state.bridge.snapshot().wake = wake.view()
             if voice is not None and voice.gated():
                 continue
             # Guarded here as well as inside SpeechLink. The claim above -- that

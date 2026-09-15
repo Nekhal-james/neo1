@@ -344,6 +344,10 @@ class WakeView:
     # The detector is publishing scores. False also when it has gone quiet,
     # which is the only way the panel can tell "not listening" from "silence".
     available: bool = False
+    # Why the detector is not running, if it is not -- mirror of AudioView's
+    # per-engine reasons, so the Audio tab can name the fix instead of a bare
+    # "unavailable".
+    reason: str = ""
     score: float = 0.0
     fired: int = 0
     last_score: float = 0.0

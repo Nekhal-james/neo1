@@ -300,6 +300,24 @@
           <div class="row"><span class="k">Engine</span><span class="v" id="v-asr-engine">—</span></div>
           <div class="row"><span class="k">Status</span><span class="v" id="v-asr-status">—</span></div>
           <div class="row"><span class="k">Listening</span><span class="v" id="v-asr-listening">—</span></div>
+          <div id="wake-sim-section" hidden>
+            <div class="row" style="margin-top:6px"><span class="k">Wake word</span><span class="v" id="v-wake-sim-status">—</span></div>
+            <div style="height:8px;background:rgba(125,138,153,.25);border-radius:4px;overflow:hidden;margin:4px 0 10px">
+              <div id="v-wake-sim-meter" style="height:100%;width:0;background:var(--good);transition:width .2s"></div>
+            </div>
+            <div class="row"><span class="k">Score</span><span class="v" id="v-wake-sim-score">—</span></div>
+            <div class="row"><span class="k">Fires</span><span class="v" id="v-wake-sim-fires">—</span></div>
+            <div class="toggles" style="margin-top:4px">
+              <button id="btn-wake-sim-listen" class="accent">Listen now</button>
+              <button id="btn-wake-sim-reset">Reset</button>
+            </div>
+            <div class="answer bad" id="wake-sim-warning" hidden></div>
+            <div class="hint">
+              The real numpy wake word detector runs here, fed by the browser mic.
+              The bar is its live score; saying "Neo" into the mic should move it.
+              <b>Listen now</b> opens the window without the word, like push-to-talk.
+            </div>
+          </div>
           <div class="row"><span class="k">Audio in</span><span class="v" id="v-asr-bytes">—</span></div>
           <div class="row"><span class="k">Utterances</span><span class="v" id="v-asr-count">—</span></div>
           <div class="answer bad" id="asr-warning" hidden></div>

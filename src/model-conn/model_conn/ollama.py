@@ -66,29 +66,56 @@ def _model_name_for(model_path_or_name: str) -> str:
     return model_path_or_name
 
 
+def _ollama_env(port: int) -> dict:
+    """Env for `ollama` CLI subprocesses so they talk to the server this
+    module started (internal port when TLS is on), not the CLI default 11434."""
+    import os
+
+    env = dict(os.environ)
+    env["OLLAMA_HOST"] = f"127.0.0.1:{port}"
+    return env
+
+
+def _model_is_registered(name: str, *, env: dict) -> bool:
+    """Whether `ollama list` already has this model registered."""
+    check = subprocess.run(
+        ["ollama", "list"], capture_output=True, text=True, env=env
+    )
+    stdout = getattr(check, "stdout", "") or ""
+    return name in stdout
+
+
 def ensure_model(model_path_or_name: str, *, port: int) -> str:
     """Make sure the model is available to Ollama; returns the model name to run.
 
     A .gguf path is registered via a generated Modelfile (`ollama create`); a
-    bare name is pulled from the registry if not already present.
+    bare name is pulled from the registry if not already present. Either way,
+    an already-registered model is reused -- `ollama create` is only called
+    when the name is absent, so repeated `neo --model up` runs do not rebuild
+    the same GGUF every time.
     """
+    env = _ollama_env(port)
     p = Path(model_path_or_name)
     if p.suffix == ".gguf":
         if not p.exists():
             raise OllamaError(f"model file not found: {p}")
         name = _model_name_for(model_path_or_name)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            modelfile = Path(tmpdir) / "Modelfile"
-            modelfile.write_text(f"FROM {p}\n", encoding="utf-8")
-            subprocess.run(
-                ["ollama", "create", name, "-f", str(modelfile)], check=True
-            )
+        if not _model_is_registered(name, env=env):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                modelfile = Path(tmpdir) / "Modelfile"
+                modelfile.write_text(f"FROM {p}\n", encoding="utf-8")
+                subprocess.run(
+                    ["ollama", "create", name, "-f", str(modelfile)],
+                    check=True,
+                    env=env,
+                )
+        else:
+            log.info("model %r already registered; reusing it", name)
         return name
 
     name = model_path_or_name
-    check = subprocess.run(["ollama", "list"], capture_output=True, text=True)
-    if name not in check.stdout:
-        subprocess.run(["ollama", "pull", name], check=True)
+    if not _model_is_registered(name, env=env):
+        subprocess.run(["ollama", "pull", name], check=True, env=env)
     return name
 
 
