@@ -209,8 +209,13 @@ def ask(
     `vision` overrides the camera context line for the same reason, and
     `campus` the directory lookup.
     """
-    if not cfg.chat.model_name:
-        log.warning("chat.model_name is not configured; the request will likely 404")
+    model_name = cfg.chat.model_name
+    if not model_name:
+        model_name = _discover_model_name(mc_cfg)
+        if model_name:
+            log.info("auto-discovered model name from host status: %s", model_name)
+        else:
+            log.warning("chat.model_name is not configured and no host status found")
 
     system = load_system_prompt(cfg)
     lookup = campus_lookup(text, cfg) if campus is None else campus
@@ -230,7 +235,7 @@ def ask(
         start = time.monotonic()
         try:
             call = transport if transport is not None else chat_transport_for(mc_cfg)
-            reply = call(host, port, cfg.chat.model_name, text, cfg.chat.timeout_s, system)
+            reply = call(host, port, model_name, text, cfg.chat.timeout_s, system)
             result = ChatResult(
                 reply=reply,
                 source="ollama",
@@ -277,6 +282,28 @@ def _resolve_endpoint(mc_cfg: ModelConnConfig, probe_transport=None) -> tuple[st
         return "127.0.0.1", mc_cfg.host.ollama_port
 
     return None, 0
+
+
+def _discover_model_name(mc_cfg: ModelConnConfig) -> str:
+    """Read the model name from var/model_conn/host.json when chat.model_name
+    is not configured.
+
+    `neo --model ... up` heartbeats this file with what it is serving, so the
+    panel can show it -- and the same file tells us what Ollama will accept
+    when the config stays silent. A stale or missing file means no host is up,
+    which ask() already handles as degraded mode.
+    """
+    try:
+        from model_conn.status_store import host_is_fresh, read_status
+    except ImportError:
+        return ""
+    payload = read_status(mc_cfg.host_status_path)
+    if not host_is_fresh(payload):
+        log.info("host status is stale or absent at %s", mc_cfg.host_status_path)
+        return ""
+    name = payload.get("model_name", "")
+    log.info("host status names model %r", name)
+    return name
 
 
 def _write(cfg: Config, prompt: str, result: ChatResult) -> None:
